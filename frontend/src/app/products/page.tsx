@@ -26,7 +26,6 @@ const FILTER_FIELDS = [
   { key: "vendor", label: "Vendor", type: "text", group: "Product" },
   { key: "status", label: "Status", type: "select", group: "Product", options: ["active", "draft", "archived"] },
   { key: "is_active", label: "Active", type: "select", group: "Product", options: ["true", "false"] },
-  { key: "variant_count", label: "Variant Count", type: "number", group: "Product" },
   // Variant fields
   { key: "v_sku", label: "SKU", type: "text", group: "Variant" },
   { key: "v_title", label: "Variant Title", type: "text", group: "Variant" },
@@ -70,13 +69,10 @@ interface Variant {
   option1: string | null;
   option2: string | null;
   option3: string | null;
-  // Metafields
   metafields: { custom?: { bin_number?: string; bin_section?: string; bin_column?: number; bin_row?: string } } | null;
-  // Dimensions
   length: number | null;
   width: number | null;
   height: number | null;
-  // Shipping
   shipping_unit: number | null;
   weight: number | null;
   weight_unit: string | null;
@@ -103,37 +99,28 @@ interface Page { items: Product[]; total: number; page: number; page_size: numbe
 
 type SortDir = "asc" | "desc" | null;
 type Density = "compact" | "default" | "comfortable";
-type ViewMode = "products" | "variants";
 
-// ── Column definitions ───────────────────────────────────────────
-const PRODUCT_COLUMNS = [
-  { key: "title", label: "Title", group: "Identity", sortable: true },
-  { key: "handle", label: "Handle", group: "Identity", sortable: true },
-  { key: "product_type", label: "Type", group: "Details", sortable: true },
-  { key: "vendor", label: "Vendor", group: "Details", sortable: true },
-  { key: "status", label: "Status", group: "Details", sortable: true },
-  { key: "variant_count", label: "Variants", group: "Details", sortable: true },
-  { key: "tags", label: "Tags", group: "Details", sortable: false },
-];
-
-const VARIANT_COLUMNS = [
-  { key: "v_image", label: "", group: "Identity", sortable: false },
-  { key: "v_product", label: "Product", group: "Identity", sortable: true },
+// ── Unified Column definitions ───────────────────────────────────────────
+// Single unified table blending products and variants
+const ALL_COLUMNS = [
+  { key: "expand", label: "", group: "Control", sortable: false },
+  { key: "p_title", label: "Product", group: "Identity", sortable: true },
   { key: "v_sku", label: "SKU", group: "Identity", sortable: true },
   { key: "v_title", label: "Variant", group: "Identity", sortable: true },
-  { key: "v_price", label: "Price", group: "Pricing", sortable: true },
-  { key: "v_inventory", label: "Inventory", group: "Stock", sortable: true },
-  { key: "v_bin", label: "Bin Location", group: "Warehouse", sortable: true },
+  { key: "p_type", label: "Type", group: "Details", sortable: true },
+  { key: "p_vendor", label: "Vendor", group: "Details", sortable: true },
+  { key: "p_status", label: "Status", group: "Details", sortable: true },
+  { key: "v_price", label: "Price", group: "Variant", sortable: true },
+  { key: "v_inventory", label: "Stock", group: "Variant", sortable: true },
+  { key: "v_bin", label: "Bin", group: "Warehouse", sortable: true },
   { key: "v_dimensions", label: "Dimensions", group: "Shipping", sortable: false },
   { key: "v_shipping_unit", label: "Ship Unit", group: "Shipping", sortable: true },
   { key: "v_weight", label: "Weight", group: "Shipping", sortable: true },
 ];
 
-const DEFAULT_PRODUCT_COLS = ["title", "handle", "product_type", "vendor", "variant_count", "status"];
-const DEFAULT_VARIANT_COLS = ["v_image", "v_product", "v_sku", "v_title", "v_price", "v_inventory", "v_bin"];
+const DEFAULT_COLS = ["expand", "p_title", "v_sku", "v_title", "v_price", "v_inventory", "v_bin", "p_vendor"];
 
-const LS_KEY_PRODUCTS = "oms_products_columns_v2";
-const LS_KEY_VARIANTS = "oms_variants_columns_v2";
+const LS_KEY_COLUMNS = "oms_products_unified_columns_v3";
 const LS_DENSITY = "oms_products_density";
 
 // ── Badge helpers ────────────────────────────────────────────────
@@ -189,69 +176,86 @@ function fmtNum(val: number | null, decimals = 0) {
 }
 
 // ── Cell renderers ───────────────────────────────────────────────
-function ProductCell({ col, product }: { col: string; product: Product }) {
-  switch (col) {
-    case "title":
-      return (
-        <div className="flex items-center gap-2 min-w-0">
-          {product.shopify_product_id && (
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-green-400 to-emerald-500 flex items-center justify-center text-white text-xs flex-shrink-0">
-              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
-            </div>
-          )}
-          <span className="font-medium text-gray-900 text-sm truncate">{product.title}</span>
-        </div>
-      );
-    case "handle":
-      return <span className="text-gray-500 text-xs font-mono truncate">{product.handle ?? "—"}</span>;
-    case "product_type":
-      return <span className="text-gray-600 text-sm">{product.product_type ?? "—"}</span>;
-    case "vendor":
-      return <span className="text-gray-600 text-sm">{product.vendor ?? "—"}</span>;
-    case "status":
-      return product.is_active
-        ? <Badge value="active" colors={STATUS_COLORS} />
-        : <Badge value="archived" colors={STATUS_COLORS} />;
-    case "variant_count":
-      return (
-        <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-gray-100 text-gray-700 text-xs font-semibold tabular-nums">
-          {product.variant_count}
-        </span>
-      );
-    case "tags":
-      return product.tags?.length ? (
-        <div className="flex flex-wrap gap-1 max-w-[180px]">
-          {product.tags.slice(0, 3).map((t: string) => (
-            <span key={t} className="px-1.5 py-0.5 bg-gray-100 text-gray-600 rounded text-xs">{t}</span>
-          ))}
-          {product.tags.length > 3 && (
-            <span className="px-1.5 py-0.5 bg-gray-100 text-gray-400 rounded text-xs">+{product.tags.length - 3}</span>
-          )}
-        </div>
-      ) : <span className="text-gray-300 text-xs select-none">—</span>;
-    default: return <span className="text-gray-300 text-xs select-none">—</span>;
+// ── Unified Cell Renderer ────────────────────────────────────────────────
+// Renders both product (parent) and variant (child) cells in one unified table
+function UnifiedCell({ 
+  col, 
+  product, 
+  variant, 
+  isProductRow 
+}: { 
+  col: string; 
+  product: Product; 
+  variant?: Variant; 
+  isProductRow: boolean;
+}) {
+  // If this is a product row (parent), show product summary
+  if (isProductRow) {
+    switch (col) {
+      case "expand":
+        return product.variants.length > 0 ? (
+          <span className="text-gray-400">▼</span>
+        ) : null;
+      case "p_title":
+        return (
+          <div className="flex items-center gap-2 min-w-0">
+            {product.shopify_product_id && (
+              <div className="w-6 h-6 rounded bg-gradient-to-br from-green-400 to-emerald-500 flex items-center justify-center text-white text-xs flex-shrink-0">
+                P
+              </div>
+            )}
+            <span className="font-semibold text-gray-900 text-sm truncate">{product.title}</span>
+            <span className="text-gray-400 text-xs">({product.variants.length} variants)</span>
+          </div>
+        );
+      case "p_handle":
+        return <span className="text-gray-500 text-xs font-mono">{product.handle ?? "—"}</span>;
+      case "p_type":
+        return <span className="text-gray-600 text-sm">{product.product_type ?? "—"}</span>;
+      case "p_vendor":
+        return <span className="text-gray-600 text-sm">{product.vendor ?? "—"}</span>;
+      case "p_status":
+        return product.is_active
+          ? <Badge value="active" colors={STATUS_COLORS} />
+          : <Badge value="archived" colors={STATUS_COLORS} />;
+      default:
+        // For variant-only columns on product rows, show summary or dash
+        if (col.startsWith("v_")) {
+          return <span className="text-gray-300 text-xs">—</span>;
+        }
+        return null;
+    }
   }
-}
-
-function VariantCell({ col, variant, product }: { col: string; variant: Variant; product: Product }) {
+  
+  // This is a variant row (child)
+  if (!variant) return <span className="text-gray-300 text-xs">—</span>;
+  
   switch (col) {
-    case "v_image":
+    case "expand":
+      return null; // No expand on variant rows
+    case "p_title":
+      // Indent to show hierarchy
+      return <span className="text-gray-400 text-xs pl-6">↳ {product.title}</span>;
+    case "p_handle":
+      return <span className="text-gray-400 text-xs pl-6">{product.handle ?? "—"}</span>;
+    case "p_type":
+      return <span className="text-gray-400 text-xs pl-6">{product.product_type ?? "—"}</span>;
+    case "p_vendor":
+      return <span className="text-gray-400 text-xs pl-6">{product.vendor ?? "—"}</span>;
+    case "p_status":
+      return <span className="pl-6">—</span>;
+    case "v_sku":
       return (
-        <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-400 to-indigo-500 flex items-center justify-center text-white text-xs flex-shrink-0">
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
-          </svg>
+        <div className="flex items-center gap-1">
+          <div className="w-5 h-5 rounded bg-gradient-to-br from-blue-400 to-indigo-500 flex items-center justify-center text-white text-[10px]">V</div>
+          <span className="text-gray-700 text-xs font-mono bg-gray-50 px-1.5 py-0.5 rounded">{variant.sku ?? "—"}</span>
         </div>
       );
-    case "v_product":
-      return <span className="font-medium text-gray-900 text-sm truncate">{product.title}</span>;
-    case "v_sku":
-      return <span className="text-gray-700 text-xs font-mono bg-gray-50 px-1.5 py-0.5 rounded">{variant.sku ?? "—"}</span>;
     case "v_title":
-      return <span className="text-gray-600 text-sm">{variant.title ?? "Default Title"}</span>;
+      return <span className="text-gray-600 text-sm">{variant.title ?? "Default"}</span>;
     case "v_price":
       return <span className="font-medium text-gray-900 tabular-nums text-sm">{fmt(variant.price)}</span>;
-    case "v_inventory":
+    case "v_inventory": {
       const qty = variant.inventory_quantity ?? 0;
       const colorClass = qty === 0 ? "text-red-600 bg-red-50" : qty < 10 ? "text-amber-600 bg-amber-50" : "text-emerald-600 bg-emerald-50";
       return (
@@ -259,9 +263,11 @@ function VariantCell({ col, variant, product }: { col: string; variant: Variant;
           {qty} in stock
         </span>
       );
-    case "v_bin":
+    }
+    case "v_bin": {
       const bin = variant.metafields?.custom?.bin_number;
       return <BinBadge bin={bin ?? null} />;
+    }
     case "v_dimensions":
       if (!variant.length && !variant.width && !variant.height) return <span className="text-gray-300 text-xs select-none">—</span>;
       return (
@@ -279,7 +285,8 @@ function VariantCell({ col, variant, product }: { col: string; variant: Variant;
     case "v_weight":
       if (!variant.weight) return <span className="text-gray-300 text-xs select-none">—</span>;
       return <span className="text-gray-600 text-xs tabular-nums">{fmtNum(variant.weight, 1)} {variant.weight_unit}</span>;
-    default: return <span className="text-gray-300 text-xs select-none">—</span>;
+    default: 
+      return <span className="text-gray-300 text-xs select-none">—</span>;
   }
 }
 
@@ -323,7 +330,6 @@ export default function ProductsPage() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
-  const [viewMode, setViewMode] = useState<ViewMode>("products");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   
   // Filters
@@ -331,8 +337,7 @@ export default function ProductsPage() {
   const [showFilters, setShowFilters] = useState(false);
   
   // Column management
-  const [visibleCols, setVisibleCols] = useState<string[]>(DEFAULT_PRODUCT_COLS);
-  const [visibleVariantCols, setVisibleVariantCols] = useState<string[]>(DEFAULT_VARIANT_COLS);
+  const [visibleCols, setVisibleCols] = useState<string[]>(DEFAULT_COLS);
   const [showColumnMenu, setShowColumnMenu] = useState(false);
   const columnMenuRef = useRef<HTMLDivElement>(null);
   
@@ -348,10 +353,8 @@ export default function ProductsPage() {
   // Load saved preferences
   useEffect(() => {
     if (typeof window !== "undefined") {
-      const savedCols = localStorage.getItem(LS_KEY_PRODUCTS);
+      const savedCols = localStorage.getItem(LS_KEY_COLUMNS);
       if (savedCols) setVisibleCols(JSON.parse(savedCols));
-      const savedVariantCols = localStorage.getItem(LS_KEY_VARIANTS);
-      if (savedVariantCols) setVisibleVariantCols(JSON.parse(savedVariantCols));
       const savedDensity = localStorage.getItem(LS_DENSITY) as Density;
       if (savedDensity) setDensity(savedDensity);
     }
@@ -360,15 +363,9 @@ export default function ProductsPage() {
   // Persist column preferences
   useEffect(() => {
     if (typeof window !== "undefined") {
-      localStorage.setItem(LS_KEY_PRODUCTS, JSON.stringify(visibleCols));
+      localStorage.setItem(LS_KEY_COLUMNS, JSON.stringify(visibleCols));
     }
   }, [visibleCols]);
-
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      localStorage.setItem(LS_KEY_VARIANTS, JSON.stringify(visibleVariantCols));
-    }
-  }, [visibleVariantCols]);
 
   // Close column menu on outside click
   useEffect(() => {
@@ -491,14 +488,6 @@ export default function ProductsPage() {
     });
   }, [filteredItems, sortCol, sortDir]);
 
-  // Flatten variants for variant view
-  const flattenedVariants = useMemo(() => {
-    const rows: { variant: Variant; product: Product }[] = [];
-    sortedItems.forEach(p => {
-      p.variants.forEach(v => rows.push({ variant: v, product: p }));
-    });
-    return rows;
-  }, [sortedItems]);
 
   function toggleExpand(id: string) {
     setExpanded(prev => {
@@ -532,8 +521,8 @@ export default function ProductsPage() {
     setFilters(prev => prev.filter(f => f.id !== id));
   }
 
-  const activeColumns = viewMode === "products" ? visibleCols : visibleVariantCols;
-  const currentColumnDefs = viewMode === "products" ? PRODUCT_COLUMNS : VARIANT_COLUMNS;
+  const activeColumns = visibleCols;
+  const currentColumnDefs = ALL_COLUMNS;
 
   const py = density === "compact" ? "py-2" : density === "comfortable" ? "py-4" : "py-3";
 
@@ -544,28 +533,9 @@ export default function ProductsPage() {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
             <h1 className="text-xl font-bold text-gray-900">
-              {viewMode === "products" ? "Products" : "Variants"}
-              {data && <span className="text-gray-400 font-normal text-base ml-2">({filteredItems.length} of {data.total})</span>}
+              Products & Variants
+              {data && <span className="text-gray-400 font-normal text-base ml-2">({filteredItems.reduce((acc, p) => acc + p.variants.length, 0)} variants)</span>}
             </h1>
-            {/* View Mode Toggle */}
-            <div className="flex bg-gray-100 rounded-lg p-1">
-              <button
-                onClick={() => setViewMode("products")}
-                className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
-                  viewMode === "products" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"
-                }`}
-              >
-                Products
-              </button>
-              <button
-                onClick={() => setViewMode("variants")}
-                className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
-                  viewMode === "variants" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"
-                }`}
-              >
-                Variants
-              </button>
-            </div>
           </div>
           <div className="flex items-center gap-2">
             {/* Density toggle */}
@@ -594,7 +564,7 @@ export default function ProductsPage() {
             </svg>
             <input
               type="text" 
-              placeholder={`Search ${viewMode}...`} 
+              placeholder="Search products..." 
               value={search}
               onChange={(e) => { setSearch(e.target.value); setPage(1); }}
               className="pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm w-64 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
@@ -626,17 +596,13 @@ export default function ProductsPage() {
             {showColumnMenu && (
               <div className="absolute top-full left-0 mt-1 w-64 bg-white rounded-lg shadow-xl border border-gray-200 py-2 z-50">
                 <div className="px-3 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wider">Visible Columns</div>
-                {currentColumnDefs.map(col => (
+                {currentColumnDefs.filter(c => c.key !== "expand").map(col => (
                   <label key={col.key} className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 cursor-pointer">
                     <input
                       type="checkbox"
-                      checked={viewMode === "products" ? visibleCols.includes(col.key) : visibleVariantCols.includes(col.key)}
+                      checked={visibleCols.includes(col.key)}
                       onChange={(e) => {
-                        if (viewMode === "products") {
-                          setVisibleCols(prev => e.target.checked ? [...prev, col.key] : prev.filter(c => c !== col.key));
-                        } else {
-                          setVisibleVariantCols(prev => e.target.checked ? [...prev, col.key] : prev.filter(c => c !== col.key));
-                        }
+                        setVisibleCols(prev => e.target.checked ? [...prev, col.key] : prev.filter(c => c !== col.key));
                       }}
                       className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                     />
@@ -742,122 +708,64 @@ export default function ProductsPage() {
             <tbody className="divide-y divide-gray-100">
               {loading ? (
                 Array.from({ length: 5 }).map((_, i) => <SkeletonRow key={i} cols={activeColumns.length} density={density} />)
-              ) : viewMode === "products" ? (
-                sortedItems.length === 0 ? (
-                  <tr>
-                    <td colSpan={activeColumns.length + 1} className="text-center py-12 text-gray-400">
-                      <div className="flex flex-col items-center gap-2">
-                        <svg className="w-12 h-12 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
-                        </svg>
-                        <p>No products found</p>
-                      </div>
-                    </td>
-                  </tr>
-                ) : (
-                  sortedItems.map(product => (
-                    <>
-                      <tr key={product.id} className={`hover:bg-blue-50/50 transition-colors ${expanded.has(product.id) ? "bg-blue-50/30" : ""}`}>
-                        <td className="px-3 py-3">
-                          {product.variants.length > 0 && (
-                            <button
-                              onClick={() => toggleExpand(product.id)}
-                              className="w-6 h-6 flex items-center justify-center rounded hover:bg-gray-200 text-gray-500 transition-colors"
-                            >
-                              {expanded.has(product.id) ? (
-                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
-                              ) : (
-                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
-                              )}
-                            </button>
-                          )}
-                        </td>
-                        {activeColumns.map(col => (
-                          <td key={col} className={`px-4 ${py}`}>
-                            <ProductCell col={col} product={product} />
-                          </td>
-                        ))}
-                      </tr>
-                      {/* Expanded Variants */}
-                      {expanded.has(product.id) && product.variants.map((variant, idx) => (
-                        <tr key={variant.id} className="bg-gray-50/50 border-l-4 border-blue-300">
-                          <td className="px-3 py-2">
-                            <span className="text-gray-300 text-xs">{idx === product.variants.length - 1 ? "└" : "├"}</span>
-                          </td>
-                          {activeColumns.map(col => {
-                            if (col === "title") {
-                              return (
-                                <td key={col} className="px-4 py-2">
-                                  <div className="flex items-center gap-2 pl-4">
-                                    <div className="w-6 h-6 rounded bg-gradient-to-br from-blue-400 to-indigo-500 flex items-center justify-center text-white text-[10px]">
-                                      V
-                                    </div>
-                                    <span className="text-gray-500 text-xs">{variant.title || "Default"}</span>
-                                  </div>
-                                </td>
-                              );
-                            }
-                            if (col === "handle") {
-                              return (
-                                <td key={col} className="px-4 py-2">
-                                  <span className="text-gray-500 text-xs font-mono bg-gray-100 px-1.5 py-0.5 rounded">{variant.sku || "—"}</span>
-                                </td>
-                              );
-                            }
-                            if (col === "variant_count") {
-                              return (
-                                <td key={col} className="px-4 py-2">
-                                  <span className="text-gray-900 text-sm font-medium tabular-nums">{fmt(variant.price)}</span>
-                                </td>
-                              );
-                            }
-                            if (col === "status") {
-                              const bin = variant.metafields?.custom?.bin_number;
-                              return (
-                                <td key={col} className="px-4 py-2">
-                                  {bin ? <BinBadge bin={bin} /> : <span className="text-gray-300 text-xs">—</span>}
-                                </td>
-                              );
-                            }
-                            return <td key={col} className="px-4 py-2" />;
-                          })}
-                        </tr>
-                      ))}
-                    </>
-                  ))
-                )
+              ) : sortedItems.length === 0 ? (
+                <tr>
+                  <td colSpan={activeColumns.length + 1} className="text-center py-12 text-gray-400">
+                    <div className="flex flex-col items-center gap-2">
+                      <svg className="w-12 h-12 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+                      </svg>
+                      <p>No products found</p>
+                    </div>
+                  </td>
+                </tr>
               ) : (
-                // Variants view
-                flattenedVariants.length === 0 ? (
-                  <tr>
-                    <td colSpan={activeColumns.length + 1} className="text-center py-12 text-gray-400">
-                      <div className="flex flex-col items-center gap-2">
-                        <svg className="w-12 h-12 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
-                        </svg>
-                        <p>No variants found</p>
-                      </div>
-                    </td>
-                  </tr>
-                ) : (
-                  flattenedVariants.map(({ variant, product }) => (
-                    <tr key={variant.id} className="hover:bg-blue-50/50 transition-colors">
-                      <td className="px-3 py-3"></td>
+                sortedItems.map(product => (
+                  <>
+                    {/* Product Row (Parent) */}
+                    <tr key={product.id} className={`hover:bg-blue-50/50 transition-colors ${expanded.has(product.id) ? "bg-blue-50/30" : ""}`}>
+                      <td className="px-3 py-3">
+                        {product.variants.length > 0 && (
+                          <button
+                            onClick={() => toggleExpand(product.id)}
+                            className="w-6 h-6 flex items-center justify-center rounded hover:bg-gray-200 text-gray-500 transition-colors"
+                          >
+                            {expanded.has(product.id) ? (
+                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                            ) : (
+                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+                            )}
+                          </button>
+                        )}
+                      </td>
                       {activeColumns.map(col => (
                         <td key={col} className={`px-4 ${py}`}>
-                          <VariantCell col={col} variant={variant} product={product} />
+                          <UnifiedCell col={col} product={product} isProductRow={true} />
                         </td>
                       ))}
                     </tr>
-                  ))
-                )
+                    {/* Expanded Variant Rows (Children) - Show ALL data for ALL columns */}
+                    {expanded.has(product.id) && product.variants.map((variant) => (
+                      <tr key={variant.id} className="bg-gray-50/50 border-l-4 border-blue-300">
+                        <td className="px-3 py-2">
+                          <span className="text-gray-300 text-xs">•</span>
+                        </td>
+                        {activeColumns.map(col => (
+                          <td key={col} className={`px-4 ${py === "py-2" ? "py-1.5" : py === "py-4" ? "py-3" : "py-2"}`}>
+                            <UnifiedCell col={col} product={product} variant={variant} isProductRow={false} />
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </>
+                ))
               )}
             </tbody>
           </table>
         </div>
 
         {/* Pagination */}
-        {viewMode === "products" && data && data.total_pages > 1 && (
+        {data && data.total_pages > 1 && (
           <div className="flex items-center justify-between text-sm text-gray-600">
             <span>Page {data.page} of {data.total_pages}</span>
             <div className="flex gap-2">
