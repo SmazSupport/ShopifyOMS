@@ -11,3 +11,4 @@ from app.models.fulfillment import (
     OmsOrder, FulfillmentGroup, FulfillmentLine, Hold,
     SkuMaster, BinLocation, Shipment, Package,
 )
+from app.models.settings import FieldVisibilitySetting, UserColumnPref

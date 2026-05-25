@@ -7,6 +7,8 @@ from app.routers import auth
 from app.routers import orders
 from app.routers import products
 from app.routers import fields
+from app.routers import settings as settings_router
+from app.routers import users
 
 app = FastAPI(
     title="OMS API",
@@ -28,3 +30,5 @@ app.include_router(auth.router)
 app.include_router(orders.router)
 app.include_router(products.router)
 app.include_router(fields.router)
+app.include_router(settings_router.router)
+app.include_router(users.router)
