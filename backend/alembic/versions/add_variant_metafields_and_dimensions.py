@@ -1,7 +1,7 @@
 """Add variant metafields and dimensions
 
 Revision ID: a1b2c3d4e5f6
-Revises: data_studio_v2_add_derived_fields_and_jobs
+Revises: data_studio_v2
 Create Date: 2026-05-25 18:55:00.000000
 
 """
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision = 'a1b2c3d4e5f6'
-down_revision = 'data_studio_v2_add_derived_fields_and_jobs'
+down_revision = 'data_studio_v2'
 branch_labels = None
 depends_on = None
 
