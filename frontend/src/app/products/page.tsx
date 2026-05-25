@@ -6,7 +6,7 @@ import AppLayout from "@/components/AppLayout";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
-interface Variant { id: string; sku: string | null; title: string | null; price: string | null; inventory_quantity: string | null; }
+interface Variant { id: string; sku: string | null; title: string | null; price: number | null; inventory_quantity: number | null; option1: string | null; option2: string | null; option3: string | null; }
 interface Product { id: string; title: string; handle: string | null; product_type: string | null; vendor: string | null; is_active: boolean; variant_count: number; variants: Variant[]; }
 interface Page { items: Product[]; total: number; page: number; total_pages: number; }
 

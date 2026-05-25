@@ -16,8 +16,11 @@ class VariantOut(BaseModel):
     shopify_variant_id: Optional[str]
     sku: Optional[str]
     title: Optional[str]
-    price: Optional[str]
-    inventory_quantity: Optional[str]
+    price: Optional[float]
+    inventory_quantity: Optional[int]
+    option1: Optional[str] = None
+    option2: Optional[str] = None
+    option3: Optional[str] = None
     model_config = {"from_attributes": True}
 
 
