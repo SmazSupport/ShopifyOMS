@@ -8,14 +8,14 @@ from app.utils.auth import hash_password
 
 
 SKUS = [
-    ("WB-BEGINNER-KIT", "The Woobles Beginner Crochet Kit", 34.99),
-    ("WB-INTER-KIT", "The Woobles Intermediate Kit", 44.99),
-    ("WB-BEAR-KIT", "Crochet Bear Kit", 29.99),
-    ("WB-BUNNY-KIT", "Crochet Bunny Kit", 29.99),
-    ("WB-DRAGON-KIT", "Crochet Dragon Kit", 34.99),
-    ("WB-CAT-KIT", "Crochet Cat Kit", 29.99),
-    ("WB-HOOK-SET", "Ergonomic Hook Set", 24.99),
-    ("WB-YARN-BUNDLE", "Premium Yarn Bundle", 19.99),
+    ("PROD-001", "Product Alpha", 34.99),
+    ("PROD-002", "Product Beta", 44.99),
+    ("PROD-003", "Product Gamma", 29.99),
+    ("PROD-004", "Product Delta", 29.99),
+    ("PROD-005", "Product Epsilon", 34.99),
+    ("PROD-006", "Product Zeta", 29.99),
+    ("PROD-007", "Accessory One", 24.99),
+    ("PROD-008", "Accessory Two", 19.99),
 ]
 
 FIRST_NAMES = ["Emma", "Liam", "Olivia", "Noah", "Ava", "James", "Sophia", "William"]
@@ -47,28 +47,28 @@ async def seed():
     async with AsyncSessionLocal() as db:
         # --- Admin user ---
         from sqlalchemy import select
-        existing = await db.execute(select(User).where(User.email == "admin@thewoobles.com"))
+        existing = await db.execute(select(User).where(User.email == "admin@oms.local"))
         if not existing.scalar_one_or_none():
             admin = User(
-                email="admin@thewoobles.com",
+                email="admin@oms.local",
                 full_name="OMS Admin",
-                hashed_password=hash_password("woobles2026!"),
+                hashed_password=hash_password("Admin123"),
                 is_active=True,
                 is_superuser=True,
             )
             db.add(admin)
-            print("Created admin user: admin@thewoobles.com / woobles2026!")
+            print("Created admin user: admin@oms.local / Admin123")
         else:
             print("Admin user already exists")
 
         # --- Shop ---
-        existing_shop = await db.execute(select(Shop).where(Shop.shopify_domain == "thewoobles.myshopify.com"))
+        existing_shop = await db.execute(select(Shop).where(Shop.shopify_domain == "demo-store.myshopify.com"))
         shop = existing_shop.scalar_one_or_none()
         if not shop:
             shop = Shop(
-                tenant_id="woobles-001",
-                shopify_domain="thewoobles.myshopify.com",
-                name="The Woobles",
+                tenant_id="demo-001",
+                shopify_domain="demo-store.myshopify.com",
+                name="Demo Store",
                 access_token="mock_token_not_real",
                 is_active=True,
             )
@@ -89,8 +89,8 @@ async def seed():
                     shopify_product_id=random_shopify_id(),
                     title=title,
                     handle=sku.lower(),
-                    product_type="Crochet Kit" if "KIT" in sku else "Accessory",
-                    vendor="The Woobles",
+                    product_type="Product" if sku.startswith("PROD") else "Accessory",
+                    vendor="Demo Vendor",
                 )
                 db.add(product)
                 await db.flush()
@@ -184,7 +184,7 @@ async def seed():
 
         await db.commit()
         print(f"Seeded {order_count} orders with line items")
-        print("\nDone! Login at: admin@thewoobles.com / woobles2026!")
+        print("\nDone! Login at: admin@oms.local / Admin123")
 
 
 if __name__ == "__main__":

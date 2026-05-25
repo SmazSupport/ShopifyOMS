@@ -79,3 +79,77 @@ async def register(
     await db.commit()
     await db.refresh(user)
     return user
+
+
+@router.get("/users", response_model=list[UserOut])
+async def list_users(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Superuser access required")
+    result = await db.execute(select(User).order_by(User.created_at))
+    return result.scalars().all()
+
+
+@router.patch("/users/{user_id}/deactivate", response_model=UserOut)
+async def deactivate_user(
+    user_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Superuser access required")
+    if user_id == current_user.id:
+        raise HTTPException(status_code=400, detail="Cannot deactivate your own account")
+
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user.is_active = False
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
+@router.patch("/users/{user_id}/activate", response_model=UserOut)
+async def activate_user(
+    user_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Superuser access required")
+
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user.is_active = True
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+@router.post("/change-password")
+async def change_password(
+    data: ChangePasswordRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not verify_password(data.current_password, current_user.hashed_password):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    if len(data.new_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+
+    current_user.hashed_password = hash_password(data.new_password)
+    await db.commit()
+    return {"message": "Password updated successfully"}

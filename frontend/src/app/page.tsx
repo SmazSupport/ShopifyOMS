@@ -1,5 +1,10 @@
+import AppLayout from "@/components/AppLayout";
 import SystemStatus from "@/components/SystemStatus";
 
 export default function HomePage() {
-  return <SystemStatus />;
+  return (
+    <AppLayout>
+      <SystemStatus />
+    </AppLayout>
+  );
 }

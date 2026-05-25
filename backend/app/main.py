@@ -4,10 +4,11 @@ from app.config import settings
 from app.routers import health
 from app.routers import status
 from app.routers import auth
+from app.routers import orders
 
 app = FastAPI(
     title="OMS API",
-    description="Order Management System – The Woobles",
+    description="Order Management System",
     version="0.1.0",
 )
 
@@ -22,3 +23,4 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(status.router)
 app.include_router(auth.router)
+app.include_router(orders.router)
