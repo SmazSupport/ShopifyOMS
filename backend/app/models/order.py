@@ -41,9 +41,9 @@ class Order(Base, TimestampMixin):
     total_outstanding: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
     total_tip_received: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
     total_weight: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    taxes_included: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    confirmed: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    test: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    taxes_included: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
+    confirmed: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
+    test: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
 
     # Payment
     payment_gateway: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -54,7 +54,7 @@ class Order(Base, TimestampMixin):
     email: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     phone: Mapped[str | None] = mapped_column(String, nullable=True)
     customer_locale: Mapped[str | None] = mapped_column(String, nullable=True)
-    buyer_accepts_marketing: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    buyer_accepts_marketing: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
 
     # Addresses (JSON snapshot — normalized in customer_addresses)
     shipping_address: Mapped[dict | None] = mapped_column(JSON, nullable=True)

@@ -22,7 +22,7 @@ class Customer(Base, TimestampMixin):
     currency: Mapped[str | None] = mapped_column(String(10), nullable=True)
 
     # Marketing & consent
-    accepts_marketing: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    accepts_marketing: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
     accepts_marketing_updated_at: Mapped[str | None] = mapped_column(String, nullable=True)
     marketing_opt_in_level: Mapped[str | None] = mapped_column(String, nullable=True)
     email_marketing_consent: Mapped[dict | None] = mapped_column(JSON, nullable=True)
@@ -30,12 +30,12 @@ class Customer(Base, TimestampMixin):
 
     # Account state
     state: Mapped[str | None] = mapped_column(String, nullable=True)
-    verified_email: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    tax_exempt: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    verified_email: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
+    tax_exempt: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
     tax_exemptions: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
     # Order history summary
-    orders_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    orders_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     total_spent: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
     last_order_id: Mapped[str | None] = mapped_column(String, nullable=True)
     last_order_name: Mapped[str | None] = mapped_column(String, nullable=True)

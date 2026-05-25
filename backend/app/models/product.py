@@ -78,8 +78,8 @@ class Variant(Base, TimestampMixin):
 
     # Fulfillment
     fulfillment_service: Mapped[str | None] = mapped_column(String, nullable=True)
-    requires_shipping: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    taxable: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    requires_shipping: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
+    taxable: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
     tax_code: Mapped[str | None] = mapped_column(String, nullable=True)
 
     # Image

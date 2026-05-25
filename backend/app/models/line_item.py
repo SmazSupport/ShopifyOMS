@@ -27,7 +27,7 @@ class LineItem(Base, TimestampMixin):
 
     # Quantity & pricing
     quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    fulfillable_quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    fulfillable_quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     price: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
     compare_at_price: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
     total_discount: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
@@ -44,9 +44,9 @@ class LineItem(Base, TimestampMixin):
     variant_inventory_management: Mapped[str | None] = mapped_column(String, nullable=True)
 
     # Flags
-    requires_shipping: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    taxable: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    gift_card: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    requires_shipping: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
+    taxable: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
+    gift_card: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
 
     # Tax & discount detail
     tax_lines: Mapped[list | None] = mapped_column(JSON, nullable=True)
