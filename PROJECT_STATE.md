@@ -1,14 +1,13 @@
 # OMS Project – State & Handoff Document
 
-> **Last Updated:** 2026-05-24
-> **Stage:** Phase 1 – Infrastructure Setup & Scaffolding
+> **Last Updated:** 2026-05-25
+> **Stage:** Phase 3 – Rule Engine, Data Studio, User Management
 
 ---
 
 ## Current Goal
 
-Build a lightweight, scalable OMS (Order Management System) for **The Woobles**, initially as an internal tool,
-designed from day one to become a multi-tenant Shopify App Store app.
+Build a lightweight, scalable OMS (Order Management System) as an internal tool, designed from day one to become a multi-tenant Shopify App Store app. Core focus: ingest Shopify orders, apply business rules, make fulfillment decisions.
 
 ---
 
@@ -22,17 +21,47 @@ designed from day one to become a multi-tenant Shopify App Store app.
 | Size              | 1 vCPU / 2 GB RAM / Basic SSD |
 | SSH               | `ssh root@198.199.89.52`      |
 | SSH Auth          | Key-based (configured)        |
+| Repo on server    | `/srv/oms`                    |
+| GitHub            | `SmazSupport/ShopifyOMS`      |
 
 ---
 
 ## Tech Stack
 
-| Layer           | Technology              | Reason                                      |
-|-----------------|-------------------------|---------------------------------------------|
-| Backend         | Python + FastAPI        | Async, data processing, rule engine support |
-| Frontend        | Next.js + React         | Fast UI, dashboard-friendly                 |
-| Database        | PostgreSQL               | Relational, strong JSON/index support       |
-| Containerization| Docker + Docker Compose | Consistent deploys from day one             |
+| Layer            | Technology                        |
+|------------------|-----------------------------------|
+| Backend          | Python 3.11 + FastAPI (async)     |
+| ORM              | SQLAlchemy 2.0 + Alembic          |
+| Database         | PostgreSQL                        |
+| Frontend         | Next.js 14 + React + TypeScript   |
+| Styling          | TailwindCSS                       |
+| Auth             | JWT (python-jose)                 |
+| Containerization | Docker + Docker Compose           |
+
+---
+
+## Deploy Workflow
+
+```bash
+# Local: commit and push
+git add -A; git commit -m "message"; git push
+
+# Server: pull and rebuild
+ssh root@198.199.89.52 "cd /srv/oms && git pull && docker compose up -d --build"
+```
+
+---
+
+## Services (Docker Compose)
+
+| Service  | Port   | Status         |
+|----------|--------|----------------|
+| backend  | 8000   | ✅ Running      |
+| frontend | 3000   | ✅ Running      |
+| postgres | 5432   | ✅ Running      |
+| redis    | —      | Planned        |
+| worker   | —      | Planned        |
+| nginx    | 80/443 | Planned        |
 
 ---
 
@@ -40,174 +69,144 @@ designed from day one to become a multi-tenant Shopify App Store app.
 
 ```
 OMS/
-├── PROJECT_STATE.md          ← This file (always keep updated)
-├── docker-compose.yml        ← All services wired here
-├── .env.example              ← Environment variable template
-├── .gitignore
+├── PROJECT_STATE.md              ← This file
+├── docker-compose.yml
+├── .env / .env.example
 │
-├── backend/                  ← FastAPI Python app
-│   ├── Dockerfile
-│   ├── requirements.txt
-│   ├── alembic/              ← DB migrations
+├── backend/
 │   ├── app/
-│   │   ├── main.py           ← FastAPI entry point
-│   │   ├── config.py         ← Settings / env vars
-│   │   ├── database.py       ← DB connection
-│   │   ├── models/           ← SQLAlchemy models
-│   │   ├── schemas/          ← Pydantic schemas
-│   │   ├── routers/          ← API route handlers
-│   │   ├── services/         ← Business logic
-│   │   └── utils/            ← Helpers (rules engine, etc.)
+│   │   ├── main.py               ← FastAPI app + router registration
+│   │   ├── database.py           ← Async SQLAlchemy engine
+│   │   ├── models/
+│   │   │   ├── __init__.py       ← Registers all models for Alembic
+│   │   │   ├── shop.py           ← Shop (tenant)
+│   │   │   ├── shopify.py        ← Shopify mirror: Order, LineItem, Product, Variant, Customer
+│   │   │   ├── fulfillment.py    ← Rule models: FieldTransformRule, BundleRule, MysteryRule, SkuRule
+│   │   │   │                       Custom fields: CustomFieldDefinition, MetafieldMapping
+│   │   │   │                       Fulfillment: OmsOrder, FulfillmentGroup, FulfillmentLine
+│   │   │   └── user.py           ← User (auth)
+│   │   ├── routers/
+│   │   │   ├── auth.py           ← /auth — login, me, change-password
+│   │   │   ├── orders.py         ← /orders — list with pagination, search, filters
+│   │   │   ├── products.py       ← /products — list with variants
+│   │   │   ├── fields.py         ← /fields — custom field definitions + metafield mappings
+│   │   │   ├── rules.py          ← /rules — CRUD for all 4 rule types + preview
+│   │   │   ├── settings.py       ← /settings — field visibility, column prefs
+│   │   │   └── users.py          ← /users — user management (superuser only)
+│   │   └── utils/
+│   │       ├── auth.py           ← JWT helpers, get_current_user
+│   │       ├── rule_engine.py    ← apply_transform, explode_bundles, apply_mystery_rules
+│   │       └── seed.py           ← Dev seed data (run manually)
+│   └── alembic/                  ← DB migrations
 │
-├── frontend/                 ← Next.js app
-│   ├── Dockerfile
-│   ├── package.json
-│   ├── next.config.js
-│   └── src/
-│       ├── app/              ← Next.js App Router pages
-│       ├── components/       ← Shared UI components
-│       ├── lib/              ← API clients, utilities
-│       └── types/            ← TypeScript types
-│
-└── docker/                   ← Supplementary Docker configs
-    ├── nginx/                ← Nginx reverse proxy (later)
-    └── postgres/             ← DB init scripts
+└── frontend/
+    └── src/app/
+        ├── page.tsx              ← / status dashboard
+        ├── login/                ← /login
+        ├── orders/               ← /orders — column chooser, computed fields, expandable line items
+        ├── products/             ← /products
+        ├── data-studio/          ← /data-studio — unified Fields + Transforms + Bundles + SKU Rules + Mystery
+        ├── fields/               ← redirects → /data-studio?tab=fields
+        ├── rules/                ← redirects → /data-studio?tab=transforms
+        ├── settings/fields/      ← redirects → /data-studio?tab=field-settings
+        ├── users/                ← /users — user management (superuser only)
+        └── profile/              ← /profile — account info + change password
 ```
 
 ---
 
-## Services (Docker Compose)
+## Data Model Layers
 
-| Service    | Port  | Status        |
-|------------|-------|---------------|
-| backend    | 8000  | ✅ Running     |
-| frontend   | 3000  | ✅ Running     |
-| postgres   | 5432  | ✅ Running     |
-| redis      | 6379  | Planned       |
-| worker     | –     | Planned       |
-| nginx      | 80/443| Planned       |
+### Layer 1 — Shopify Mirror
+`shops`, `orders`, `order_line_items`, `customers`, `customer_addresses`, `products`, `product_variants`, `fulfillments`, `fulfillment_orders`, `webhook_log`
 
----
+### Layer 2 — OMS Rule/Config
+| Model | Purpose |
+|---|---|
+| `FieldTransformRule` | Compute a new field from an existing one (regex, split, formula, etc.) |
+| `BundleRule` | Define child SKUs for a parent bundle SKU |
+| `MysteryRule` | Substitution rules for mystery/surprise SKUs |
+| `SkuRule` | Per-SKU flags: ships_alone, preorder, hold, etc. |
+| `CustomFieldDefinition` | Define custom app fields per entity type |
+| `MetafieldMapping` | Map Shopify metafield keys to custom fields |
 
-## Server Setup Checklist (DigitalOcean Droplet)
+### Layer 3 — OMS Fulfillment Decisions
+`oms_orders`, `fulfillment_groups`, `fulfillment_lines`, `holds`
 
-### Complete ✅
-- [x] Droplet created (Ubuntu 24.04 LTS)
-- [x] SSH key authentication working
-- [x] Docker 29.5.2 + Docker Compose v5.1.4 installed
-- [x] Git installed
-- [x] UFW firewall active (ports 22, 80, 443, 3000, 8000)
-- [x] DO cloud firewall (firewall22) configured
-- [x] Repo cloned to `/srv/oms` tracking `origin/main`
-- [x] `.env` configured on server
-- [x] All containers running
-- [x] Alembic migrations applied
-
-### Deploy Workflow
-```bash
-# Local: make changes, commit, push
-git push
-
-# Server: pull and rebuild
-ssh root@198.199.89.52
-cd /srv/oms && git pull && docker compose up -d --build
-```
+### Layer 4 — Warehouse Execution
+`inventory_items / sku_master`, `bin_locations`, `shipments`, `packages`
 
 ---
 
-## Core Data Models (Phase 1)
+## API Endpoints
 
-| Model         | Key Fields                                                      |
-|---------------|-----------------------------------------------------------------|
-| `Shop`        | id, tenant_id, shopify_domain, access_token, name              |
-| `Order`       | id, shop_id, shopify_order_id, status, tags, created_at        |
-| `LineItem`    | id, order_id, sku, quantity, variant_id, product_title         |
-| `Product`     | id, shop_id, shopify_product_id, title, handle                 |
-| `Variant`     | id, product_id, shopify_variant_id, sku, price                 |
-| `Customer`    | id, shop_id, shopify_customer_id, email, name                  |
-| `Rule`        | id, shop_id, name, conditions (JSON), actions (JSON), priority |
-
----
-
-## Rule Engine Design
-
-```
-IF:
-  - order contains SKU
-  - shipping country matches
-  - order tags match
-  - order value >= threshold
-  - is_wholesale / is_d2c flag
-
-THEN:
-  - assign shipping service
-  - assign workflow
-  - place hold
-  - split order
-  - choose packing slip template
-  - choose picking workflow
-```
-
-Rules stored as structured JSON in PostgreSQL. Evaluated server-side on order ingestion.
+| Router | Prefix | Key Endpoints |
+|---|---|---|
+| auth | `/auth` | POST /login, GET /me, POST /change-password |
+| orders | `/orders` | GET / (paginated, search, status filter) |
+| products | `/products` | GET / (paginated, search, with variants) |
+| fields | `/fields` | CRUD custom fields + metafield mappings |
+| rules | `/rules` | CRUD /transforms /bundles /mystery /sku + POST /preview |
+| settings | `/settings` | GET/PUT column prefs, GET/PUT field visibility |
+| users | `/users` | CRUD (superuser only) |
 
 ---
 
-## Multi-Tenant Strategy
+## Frontend Pages
 
-- All tables include `shop_id` (and later `tenant_id`)
-- Row-level data isolation enforced at the ORM/query layer
-- Designed for eventual Shopify App Store submission
-
----
-
-## File Handling
-
-- **No PDFs/labels/images in PostgreSQL**
-- Use local temp storage now
-- Migrate to S3/Cloudflare R2 later
-
----
-
-## Performance Commitments
-
-- Pagination on all list endpoints (default page size: 50)
-- Indexed filtering on `shop_id`, `status`, `created_at`, `tags`
-- Background jobs for heavy processing (Celery + Redis, later)
+| Route | Status | Notes |
+|---|---|---|
+| `/` | ✅ Live | System status dashboard |
+| `/login` | ✅ Live | JWT auth |
+| `/orders` | ✅ Live | Column chooser, computed field columns (⚡), expandable line items |
+| `/products` | ✅ Live | Product + variant table |
+| `/data-studio` | ✅ Live | Unified: Fields, Transforms, Bundles, SKU Rules, Mystery tabs |
+| `/users` | ✅ Live | Superuser-only user management |
+| `/profile` | ✅ Live | Account info + change password |
+| `/fields` | ✅ Live | Redirects → `/data-studio?tab=fields` |
+| `/rules` | ✅ Live | Redirects → `/data-studio?tab=transforms` |
+| `/settings/fields` | ✅ Live | Redirects → `/data-studio?tab=field-settings` |
 
 ---
 
-## Current Phase: Phase 2
+## Admin Credentials (Dev)
 
-### Phase 1 — COMPLETE ✅
-- [x] Define architecture
-- [x] Create project structure + scaffolding
-- [x] DigitalOcean server setup (Docker, Git, firewall)
-- [x] GitHub repo connected (local + server on git pull workflow)
-- [x] FastAPI backend running on port 8000
-- [x] PostgreSQL with all 6 tables (shops, orders, line_items, products, variants, customers)
-- [x] Alembic migrations applied
-- [x] Next.js 15.3.8 frontend running on port 3000
-- [x] /status endpoint + system dashboard live at http://198.199.89.52:3000
-
-### Phase 2 — Next Up
-- [ ] Order table UI (list view with pagination)
-- [ ] Filtering + saved views
-- [ ] Shopify webhook ingestion (orders/create, orders/updated)
-- [ ] Seed data / test orders
-
-**NOT in scope yet:**
-- EasyPost integration
-- Rule engine execution
-- PDF/label generation
-- Redis / background workers
+| Field | Value |
+|---|---|
+| Email | `admin@oms.local` |
+| Password | `Admin123` |
 
 ---
 
-## Notes / Decisions Log
+## Pending Work
 
-| Date       | Decision                                                             |
-|------------|----------------------------------------------------------------------|
-| 2026-05-24 | Single VPS deployment for Phase 1. No K8s, no microservices.        |
-| 2026-05-24 | Docker Compose from day one for deployment consistency.              |
-| 2026-05-24 | PostgreSQL chosen over MongoDB — relational model better for orders. |
-| 2026-05-24 | File storage stays out of DB — local for now, S3/R2 later.          |
+| ID | Task | Priority |
+|---|---|---|
+| rule-10 | Wire computed field values into Orders API response | Medium |
+| 11 | Update seed data with SKU rules, bundle rules, field transforms | Medium |
+
+---
+
+## Key Design Decisions
+
+| Date | Decision |
+|---|---|
+| 2026-05-24 | Single VPS (DigitalOcean), Docker Compose, no K8s |
+| 2026-05-24 | PostgreSQL — relational model better for orders |
+| 2026-05-24 | No PDFs/files in DB — local temp storage now, S3/R2 later |
+| 2026-05-24 | Pagination on all list endpoints (default 50) |
+| 2026-05-25 | Unified "Data Studio" replaces /fields, /rules, /settings/fields |
+| 2026-05-25 | Computed fields (FieldTransformRules) surface as ⚡ columns in Orders table |
+| 2026-05-25 | User model has no shop_id — single-tenant fallback via get_shop_id() helper |
+| 2026-05-25 | All IDE TypeScript lint errors are false positives (missing node_modules locally) — Docker builds clean |
+
+---
+
+## Not In Scope Yet
+
+- Shopify webhook ingestion (orders/create, orders/updated)
+- EasyPost / shipping label generation
+- Preorder / backorder rules (deferred)
+- Redis + Celery background workers
+- Nginx reverse proxy / SSL
+- Multi-tenant isolation (shop_id on User model)

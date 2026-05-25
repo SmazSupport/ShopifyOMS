@@ -25,30 +25,39 @@ interface Order {
   payment_gateway: string | null; source_name: string | null;
   discount_codes: {code: string; amount: string}[] | null;
   note: string | null;
+  computed_fields?: Record<string, string | null>;
 }
 interface Page { items: Order[]; total: number; page: number; page_size: number; total_pages: number; }
 
-// ── All available columns ────────────────────────────────────────
-const ALL_COLUMNS = [
-  { key: "order_number",       label: "Order #" },
-  { key: "customer",           label: "Customer" },
-  { key: "email",              label: "Email" },
-  { key: "status",             label: "Status" },
-  { key: "fulfillment_status", label: "Fulfillment" },
-  { key: "financial_status",   label: "Payment" },
-  { key: "total_price",        label: "Total" },
-  { key: "subtotal_price",     label: "Subtotal" },
-  { key: "total_tax",          label: "Tax" },
-  { key: "total_discounts",    label: "Discounts" },
-  { key: "item_count",         label: "Items" },
-  { key: "tags",               label: "Tags" },
-  { key: "payment_gateway",    label: "Gateway" },
-  { key: "source_name",        label: "Source" },
-  { key: "discount_codes",     label: "Discount Codes" },
-  { key: "shipping_address",   label: "Ship To" },
-  { key: "note",               label: "Note" },
-  { key: "processed_at",       label: "Processed" },
-  { key: "created_at",         label: "Created" },
+interface ComputedFieldDef {
+  key: string;
+  output_field_key: string;
+  output_field_label: string;
+  source_field: string;
+  transform_type: string;
+}
+
+// ── All available columns (static) ───────────────────────────────
+const STATIC_COLUMNS = [
+  { key: "order_number",       label: "Order #",        computed: false },
+  { key: "customer",           label: "Customer",       computed: false },
+  { key: "email",              label: "Email",          computed: false },
+  { key: "status",             label: "Status",         computed: false },
+  { key: "fulfillment_status", label: "Fulfillment",    computed: false },
+  { key: "financial_status",   label: "Payment",        computed: false },
+  { key: "total_price",        label: "Total",          computed: false },
+  { key: "subtotal_price",     label: "Subtotal",       computed: false },
+  { key: "total_tax",          label: "Tax",            computed: false },
+  { key: "total_discounts",    label: "Discounts",      computed: false },
+  { key: "item_count",         label: "Items",          computed: false },
+  { key: "tags",               label: "Tags",           computed: false },
+  { key: "payment_gateway",    label: "Gateway",        computed: false },
+  { key: "source_name",        label: "Source",         computed: false },
+  { key: "discount_codes",     label: "Discount Codes", computed: false },
+  { key: "shipping_address",   label: "Ship To",        computed: false },
+  { key: "note",               label: "Note",           computed: false },
+  { key: "processed_at",       label: "Processed",      computed: false },
+  { key: "created_at",         label: "Created",        computed: false },
 ];
 
 const DEFAULT_COLS = ["order_number", "customer", "status", "fulfillment_status", "financial_status", "total_price", "item_count", "created_at"];
@@ -80,7 +89,14 @@ function fmt(val: number | null, currency = "USD") {
 }
 
 // ── Cell renderer ────────────────────────────────────────────────
-function Cell({ col, order }: { col: string; order: Order }) {
+function Cell({ col, order, computedDefs }: { col: string; order: Order; computedDefs: ComputedFieldDef[] }) {
+  const compDef = computedDefs.find(d => `cf_${d.output_field_key}` === col);
+  if (compDef) {
+    const val = order.computed_fields?.[compDef.output_field_key] ?? null;
+    return val
+      ? <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-violet-100 text-violet-800">{val}</span>
+      : <span className="text-gray-300 text-xs">—</span>;
+  }
   switch (col) {
     case "order_number": return <span className="font-semibold text-gray-900">{order.order_number ?? "—"}</span>;
     case "customer": return (
@@ -123,6 +139,13 @@ function Cell({ col, order }: { col: string; order: Order }) {
     case "created_at": return <span className="text-gray-500 text-xs whitespace-nowrap">{new Date(order.created_at).toLocaleDateString()}</span>;
     default: return <span className="text-gray-300 text-xs">—</span>;
   }
+}
+
+function buildAllColumns(computedDefs: ComputedFieldDef[]) {
+  return [
+    ...STATIC_COLUMNS,
+    ...computedDefs.map(d => ({ key: `cf_${d.output_field_key}`, label: `⚡ ${d.output_field_label}`, computed: true })),
+  ];
 }
 
 // ── Line items panel ─────────────────────────────────────────────
@@ -172,11 +195,12 @@ function LineItemsPanel({ items, currency }: { items: LineItem[]; currency: stri
 
 // ── Column chooser panel ─────────────────────────────────────────
 function ColumnChooser({
-  visibleCols, onChange, onClose,
+  visibleCols, onChange, onClose, allColumns,
 }: {
   visibleCols: string[];
   onChange: (cols: string[]) => void;
   onClose: () => void;
+  allColumns: { key: string; label: string; computed: boolean }[];
 }) {
   const [local, setLocal] = useState(visibleCols);
   const dragIdx = useRef<number | null>(null);
@@ -196,6 +220,9 @@ function ColumnChooser({
     setLocal(next);
   };
 
+  const staticCols = allColumns.filter(c => !c.computed);
+  const computedCols = allColumns.filter(c => c.computed);
+
   return (
     <div className="absolute right-0 top-10 z-30 bg-white border border-gray-200 rounded-xl shadow-xl w-72 overflow-hidden">
       <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
@@ -207,20 +234,30 @@ function ColumnChooser({
         </div>
       </div>
       <p className="px-4 py-2 text-xs text-gray-400">Check to show · drag to reorder</p>
-      <div className="max-h-72 overflow-y-auto divide-y divide-gray-50">
-        {ALL_COLUMNS.map((col, i) => (
-          <div
-            key={col.key}
-            draggable={local.includes(col.key)}
-            onDragStart={() => onDragStart(i)}
-            onDragOver={(e) => onDragOver(e, i)}
+      <div className="max-h-80 overflow-y-auto divide-y divide-gray-50">
+        {staticCols.map((col, i) => (
+          <div key={col.key} draggable={local.includes(col.key)}
+            onDragStart={() => onDragStart(i)} onDragOver={(e) => onDragOver(e, i)}
             className={`flex items-center gap-3 px-4 py-2.5 cursor-pointer select-none hover:bg-gray-50 ${local.includes(col.key) ? "" : "opacity-50"}`}
-            onClick={() => toggle(col.key)}
-          >
+            onClick={() => toggle(col.key)}>
             <span className="text-gray-300 cursor-grab text-xs">⠿</span>
-            <input type="checkbox" readOnly checked={local.includes(col.key)}
-              className="w-4 h-4 rounded border-gray-300 text-blue-600 pointer-events-none" />
+            <input type="checkbox" readOnly checked={local.includes(col.key)} className="w-4 h-4 rounded border-gray-300 text-blue-600 pointer-events-none" />
             <span className="text-sm text-gray-700">{col.label}</span>
+          </div>
+        ))}
+        {computedCols.length > 0 && (
+          <div className="px-4 py-2 bg-violet-50 border-t border-violet-100">
+            <span className="text-xs font-semibold text-violet-600 uppercase tracking-wide">⚡ Computed Fields</span>
+          </div>
+        )}
+        {computedCols.map((col, i) => (
+          <div key={col.key} draggable={local.includes(col.key)}
+            onDragStart={() => onDragStart(staticCols.length + i)} onDragOver={(e) => onDragOver(e, staticCols.length + i)}
+            className={`flex items-center gap-3 px-4 py-2.5 cursor-pointer select-none hover:bg-violet-50 ${local.includes(col.key) ? "" : "opacity-50"}`}
+            onClick={() => toggle(col.key)}>
+            <span className="text-gray-300 cursor-grab text-xs">⠿</span>
+            <input type="checkbox" readOnly checked={local.includes(col.key)} className="w-4 h-4 rounded border-gray-300 text-violet-600 pointer-events-none" />
+            <span className="text-sm text-violet-700">{col.label}</span>
           </div>
         ))}
       </div>
@@ -239,21 +276,30 @@ export default function OrdersPage() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [showColChooser, setShowColChooser] = useState(false);
   const [visibleCols, setVisibleCols] = useState<string[]>(DEFAULT_COLS);
+  const [computedDefs, setComputedDefs] = useState<ComputedFieldDef[]>([]);
 
   const getToken = () => localStorage.getItem("oms_token");
+  const allColumns = buildAllColumns(computedDefs);
 
-  // Load saved column prefs
+  // Load saved column prefs + computed field defs
   useEffect(() => {
     const saved = localStorage.getItem(LS_KEY);
     if (saved) {
       try { setVisibleCols(JSON.parse(saved)); } catch {}
     }
-    // Also try to load from API
     const token = getToken();
     if (!token) return;
+    // Load column prefs
     fetch(`${API_URL}/settings/columns/order`, { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d?.column_order?.length) { setVisibleCols(d.column_order); localStorage.setItem(LS_KEY, JSON.stringify(d.column_order)); } })
+      .catch(() => {});
+    // Load active order-entity field transforms as computed columns
+    fetch(`${API_URL}/rules/transforms?source_entity=order`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.ok ? r.json() : [])
+      .then((transforms: ComputedFieldDef[]) => {
+        setComputedDefs(transforms.filter((t: ComputedFieldDef) => t.output_field_key));
+      })
       .catch(() => {});
   }, []);
 
@@ -292,7 +338,7 @@ export default function OrdersPage() {
     });
   };
 
-  const colDefs = ALL_COLUMNS.filter(c => visibleCols.includes(c.key))
+  const colDefs = allColumns.filter(c => visibleCols.includes(c.key))
     .sort((a, b) => visibleCols.indexOf(a.key) - visibleCols.indexOf(b.key));
 
   return (
@@ -304,7 +350,7 @@ export default function OrdersPage() {
             Orders {data && <span className="text-gray-400 font-normal text-base ml-1">({data.total.toLocaleString()})</span>}
           </h1>
           <div className="flex gap-2">
-            <a href="/settings/fields" className="text-xs text-gray-400 hover:text-blue-600 px-3 py-2">Field Settings</a>
+              <a href="/data-studio" className="text-xs text-gray-400 hover:text-blue-600 px-3 py-2">Data Studio</a>
           </div>
         </div>
 
@@ -337,6 +383,7 @@ export default function OrdersPage() {
                 visibleCols={visibleCols}
                 onChange={saveColumns}
                 onClose={() => setShowColChooser(false)}
+                allColumns={allColumns}
               />
             )}
           </div>
@@ -373,7 +420,7 @@ export default function OrdersPage() {
                     </td>
                     {colDefs.map(col => (
                       <td key={col.key} className="px-4 py-3">
-                        <Cell col={col.key} order={order} />
+                        <Cell col={col.key} order={order} computedDefs={computedDefs} />
                       </td>
                     ))}
                   </tr>
