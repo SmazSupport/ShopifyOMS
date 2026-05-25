@@ -199,22 +199,30 @@ Rules stored as structured JSON in PostgreSQL. Evaluated server-side on order in
 
 ---
 
-## Current Phase: Phase 1
+## Current Phase: Phase 2
 
-**Focus:**
+### Phase 1 — COMPLETE ✅
 - [x] Define architecture
 - [x] Create project structure + scaffolding
-- [ ] Finish DigitalOcean server setup
-- [ ] Get Docker Compose stack running locally
-- [ ] Stand up FastAPI with DB connection
-- [ ] Create initial database migrations
-- [ ] Stand up Next.js frontend
+- [x] DigitalOcean server setup (Docker, Git, firewall)
+- [x] GitHub repo connected (local + server on git pull workflow)
+- [x] FastAPI backend running on port 8000
+- [x] PostgreSQL with all 6 tables (shops, orders, line_items, products, variants, customers)
+- [x] Alembic migrations applied
+- [x] Next.js 15.3.8 frontend running on port 3000
+- [x] /status endpoint + system dashboard live at http://198.199.89.52:3000
+
+### Phase 2 — Next Up
+- [ ] Order table UI (list view with pagination)
+- [ ] Filtering + saved views
+- [ ] Shopify webhook ingestion (orders/create, orders/updated)
+- [ ] Seed data / test orders
 
 **NOT in scope yet:**
 - EasyPost integration
-- Shopify webhook ingestion
 - Rule engine execution
 - PDF/label generation
+- Redis / background workers
 
 ---
 
