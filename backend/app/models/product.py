@@ -86,5 +86,16 @@ class Variant(Base, TimestampMixin):
     image_id: Mapped[str | None] = mapped_column(String, nullable=True)
     image: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
+    # Metafields (Shopify-style JSON storage)
+    metafields: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    # Dimensions (for shipping calculations)
+    length: Mapped[float | None] = mapped_column(Numeric(10, 4), nullable=True)
+    width: Mapped[float | None] = mapped_column(Numeric(10, 4), nullable=True)
+    height: Mapped[float | None] = mapped_column(Numeric(10, 4), nullable=True)
+
+    # Shipping unit multiplier (derived from dimensions)
+    shipping_unit: Mapped[float | None] = mapped_column(Numeric(10, 4), nullable=True)
+
     product: Mapped["Product"] = relationship("Product", back_populates="variants")
     line_items: Mapped[list["LineItem"]] = relationship("LineItem", back_populates="variant")

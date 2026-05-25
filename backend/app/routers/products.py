@@ -21,6 +21,17 @@ class VariantOut(BaseModel):
     option1: Optional[str] = None
     option2: Optional[str] = None
     option3: Optional[str] = None
+    # Metafields
+    metafields: Optional[dict] = None
+    # Dimensions
+    length: Optional[float] = None
+    width: Optional[float] = None
+    height: Optional[float] = None
+    # Shipping
+    shipping_unit: Optional[float] = None
+    weight: Optional[float] = None
+    weight_unit: Optional[str] = None
+    grams: Optional[int] = None
     model_config = {"from_attributes": True}
 
 

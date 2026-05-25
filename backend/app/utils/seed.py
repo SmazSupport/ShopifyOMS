@@ -18,6 +18,41 @@ SKUS = [
     ("PROD-008", "Accessory Two", 19.99),
 ]
 
+# Bin location configuration
+BIN_SECTIONS = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "S"]
+BIN_ROWS = ["A", "B", "C"]
+
+# Dimension profiles for shipping calculations
+DIMENSION_PROFILES = [
+    {
+        "name": "common",
+        "length": 6.5,
+        "width": 6.0,
+        "height": 2.5,
+        "shipping_unit": 1.0,
+        "weight_oz": 4.0,
+        "grams": 113,
+    },
+    {
+        "name": "small",
+        "length": 5.5,
+        "width": 5.0,
+        "height": 0.5,
+        "shipping_unit": 0.2,
+        "weight_oz": 0.7,
+        "grams": 20,
+    },
+    {
+        "name": "large",
+        "length": 10.0,
+        "width": 8.0,
+        "height": 5.0,
+        "shipping_unit": 3.5,
+        "weight_oz": 6.0,
+        "grams": 170,
+    },
+]
+
 FIRST_NAMES = ["Emma", "Liam", "Olivia", "Noah", "Ava", "James", "Sophia", "William"]
 LAST_NAMES = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis"]
 
@@ -36,6 +71,21 @@ FINANCIAL_STATUSES = ["paid", "paid", "paid", "pending", "refunded"]
 
 def random_shopify_id():
     return str(random.randint(1000000000000, 9999999999999))
+
+
+def generate_bin_number() -> str:
+    """Generate a random bin number (e.g., B7A, S12C)"""
+    section = random.choice(BIN_SECTIONS)
+    column = random.randint(1, 15)
+    row = random.choice(BIN_ROWS)
+    return f"{section}{column}{row}"
+
+
+def get_dimension_profile() -> dict:
+    """Get a random dimension profile with weighted distribution"""
+    # Weight: common (60%), small (30%), large (10%)
+    weights = [0.6, 0.3, 0.1]
+    return random.choices(DIMENSION_PROFILES, weights=weights)[0]
 
 
 def random_date(days_back=90):
@@ -95,6 +145,10 @@ async def seed():
                 db.add(product)
                 await db.flush()
 
+                # Generate variant data with metafields and dimensions
+                profile = get_dimension_profile()
+                bin_number = generate_bin_number()
+
                 variant = Variant(
                     product_id=product.id,
                     shopify_variant_id=random_shopify_id(),
@@ -102,6 +156,21 @@ async def seed():
                     title="Default Title",
                     price=str(price),
                     inventory_quantity=str(random.randint(10, 200)),
+                    grams=profile["grams"],
+                    weight=profile["weight_oz"],
+                    weight_unit="oz",
+                    length=profile["length"],
+                    width=profile["width"],
+                    height=profile["height"],
+                    shipping_unit=profile["shipping_unit"],
+                    metafields={
+                        "custom": {
+                            "bin_number": bin_number,
+                            "bin_section": bin_number[0],
+                            "bin_column": int(bin_number[1:-1]),
+                            "bin_row": bin_number[-1],
+                        }
+                    },
                 )
                 db.add(variant)
                 await db.flush()
