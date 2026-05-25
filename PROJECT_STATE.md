@@ -80,9 +80,9 @@ OMS/
 
 | Service    | Port  | Status        |
 |------------|-------|---------------|
-| backend    | 8000  | Scaffolded    |
-| frontend   | 3000  | Scaffolded    |
-| postgres   | 5432  | Configured    |
+| backend    | 8000  | ✅ Running     |
+| frontend   | 3000  | ✅ Running     |
+| postgres   | 5432  | ✅ Running     |
 | redis      | 6379  | Planned       |
 | worker     | –     | Planned       |
 | nginx      | 80/443| Planned       |
@@ -91,49 +91,26 @@ OMS/
 
 ## Server Setup Checklist (DigitalOcean Droplet)
 
-### Done
-- [x] Droplet created (Ubuntu 24.04)
-- [x] SSH key added during setup
+### Complete ✅
+- [x] Droplet created (Ubuntu 24.04 LTS)
+- [x] SSH key authentication working
+- [x] Docker 29.5.2 + Docker Compose v5.1.4 installed
+- [x] Git installed
+- [x] UFW firewall active (ports 22, 80, 443, 3000, 8000)
+- [x] DO cloud firewall (firewall22) configured
+- [x] Repo cloned to `/srv/oms` tracking `origin/main`
+- [x] `.env` configured on server
+- [x] All containers running
+- [x] Alembic migrations applied
 
-### Still Needed on Server
-- [ ] SSH in and run initial hardening
-- [ ] Create non-root deploy user (`adduser deploy`)
-- [ ] Install Docker + Docker Compose
-- [ ] Install Git
-- [ ] Configure UFW firewall (allow 22, 80, 443)
-- [ ] (Optional) Set up a domain / DNS pointing to `198.199.89.52`
-- [ ] Clone this repo to `/srv/oms` on the server
-- [ ] Set up `.env` from `.env.example` on server
-- [ ] Run `docker compose up -d` for first time
-
-### Server Commands (Run in order after SSH in)
+### Deploy Workflow
 ```bash
-# 1. Update packages
-apt update && apt upgrade -y
+# Local: make changes, commit, push
+git push
 
-# 2. Install Docker
-curl -fsSL https://get.docker.com | sh
-
-# 3. Install Docker Compose (plugin)
-apt install docker-compose-plugin -y
-
-# 4. Install Git
-apt install git -y
-
-# 5. Firewall
-ufw allow OpenSSH
-ufw allow 80
-ufw allow 443
-ufw enable
-
-# 6. Create deploy user (optional but recommended)
-adduser deploy
-usermod -aG docker deploy
-
-# 7. Clone repo
-mkdir -p /srv/oms
-cd /srv/oms
-git clone <YOUR_REPO_URL> .
+# Server: pull and rebuild
+ssh root@198.199.89.52
+cd /srv/oms && git pull && docker compose up -d --build
 ```
 
 ---
