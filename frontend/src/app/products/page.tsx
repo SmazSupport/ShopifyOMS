@@ -232,6 +232,7 @@ export default function ProductsPage() {
                   } else {
                     // Variant row
                     const v = variant!;
+                    console.log(`Variant ${v.sku}:`, { metafields: v.metafields, length: v.length, width: v.width, height: v.height, shipping_unit: v.shipping_unit });
                     const qty = v.inventory_quantity ?? 0;
                     const stockColor = qty === 0 ? "text-red-600 bg-red-50" : qty < 10 ? "text-amber-600 bg-amber-50" : "text-emerald-600 bg-emerald-50";
                     return (
