@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_
 from datetime import datetime
 
-from app.database import get_async_session
+from app.database import get_db as get_async_session
 from app.utils.auth import get_current_user
 from app.models import (
     User, FieldTransformRule, DerivedFieldValue, RecalculationJob, EntityRelationship,
