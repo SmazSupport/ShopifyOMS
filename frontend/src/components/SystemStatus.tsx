@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -9,6 +10,11 @@ interface StatusData {
   database: string;
   db_error?: string;
   table_counts: Record<string, number>;
+}
+
+interface UserData {
+  email: string;
+  full_name: string | null;
 }
 
 function StatusBadge({ value }: { value: string }) {
@@ -26,14 +32,28 @@ function StatusBadge({ value }: { value: string }) {
 }
 
 export default function SystemStatus() {
+  const router = useRouter();
   const [status, setStatus] = useState<StatusData | null>(null);
+  const [user, setUser] = useState<UserData | null>(null);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [lastChecked, setLastChecked] = useState<string>("");
 
+  const getToken = () => localStorage.getItem("oms_token");
+
+  const logout = () => {
+    localStorage.removeItem("oms_token");
+    router.push("/login");
+  };
+
   const fetchStatus = async () => {
+    const token = getToken();
+    if (!token) { router.push("/login"); return; }
     try {
-      const res = await fetch(`${API_URL}/status`);
+      const res = await fetch(`${API_URL}/status`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.status === 401) { logout(); return; }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setStatus(data);
@@ -48,6 +68,16 @@ export default function SystemStatus() {
   };
 
   useEffect(() => {
+    const token = getToken();
+    if (!token) { router.push("/login"); return; }
+
+    fetch(`${API_URL}/auth/me`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((r) => { if (r.status === 401) { logout(); } return r.json(); })
+      .then((d) => setUser(d))
+      .catch(() => {});
+
     fetchStatus();
     const interval = setInterval(fetchStatus, 15000);
     return () => clearInterval(interval);
@@ -57,12 +87,27 @@ export default function SystemStatus() {
     <main className="min-h-screen bg-gray-50 p-8">
       <div className="max-w-2xl mx-auto">
 
-        <div className="mb-8">
-          <h1 className="text-2xl font-bold text-gray-900">OMS – System Status</h1>
-          <p className="text-sm text-gray-500 mt-1">
-            Auto-refreshes every 15s
-            {lastChecked && ` · Last checked: ${lastChecked}`}
-          </p>
+        <div className="flex items-center justify-between mb-8">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">OMS – System Status</h1>
+            <p className="text-sm text-gray-500 mt-1">
+              Auto-refreshes every 15s
+              {lastChecked && ` · Last checked: ${lastChecked}`}
+            </p>
+          </div>
+          <div className="flex items-center gap-3">
+            {user && (
+              <span className="text-sm text-gray-600">
+                {user.full_name ?? user.email}
+              </span>
+            )}
+            <button
+              onClick={logout}
+              className="text-sm text-red-600 hover:text-red-800 font-medium border border-red-200 px-3 py-1.5 rounded-lg hover:bg-red-50"
+            >
+              Sign out
+            </button>
+          </div>
         </div>
 
         {loading && (
