@@ -106,6 +106,10 @@ export default function ProductsPage() {
       const res = await fetch(`${API_URL}/products?${params}`, { headers: { Authorization: `Bearer ${token}` } });
       if (res.status === 401) { router.push("/login"); return; }
       const json = await res.json();
+      console.log("API Response:", json);
+      if (json.items && json.items[0]?.variants) {
+        console.log("First variant:", json.items[0].variants[0]);
+      }
       setData(json);
     } catch (e) {
       console.error("Failed to fetch products:", e);
