@@ -16,6 +16,8 @@ interface User {
 const NAV = [
   { href: "/", label: "Status" },
   { href: "/orders", label: "Orders" },
+  { href: "/products", label: "Products" },
+  { href: "/fields", label: "Fields & Mappings" },
   { href: "/users", label: "Users", superuser: true },
   { href: "/profile", label: "My Profile" },
 ];

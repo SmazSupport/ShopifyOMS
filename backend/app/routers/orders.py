@@ -6,10 +6,22 @@ from pydantic import BaseModel
 from typing import Optional
 from app.database import get_db
 from app.models.order import Order
+from app.models.line_item import LineItem
 from app.models.customer import Customer
 from app.utils.auth import get_current_user
 
 router = APIRouter(prefix="/orders", tags=["orders"])
+
+
+class LineItemOut(BaseModel):
+    id: str
+    shopify_line_item_id: Optional[str]
+    sku: Optional[str]
+    product_title: Optional[str]
+    variant_title: Optional[str]
+    quantity: int
+    price: Optional[float]
+    model_config = {"from_attributes": True}
 
 
 class CustomerSnippet(BaseModel):
@@ -33,6 +45,7 @@ class OrderOut(BaseModel):
     tags: Optional[list]
     created_at: str
     customer: Optional[CustomerSnippet]
+    line_items: list[LineItemOut] = []
 
     model_config = {"from_attributes": True}
 
@@ -55,7 +68,7 @@ async def list_orders(
     db: AsyncSession = Depends(get_db),
     _=Depends(get_current_user),
 ):
-    query = select(Order).options(selectinload(Order.customer))
+    query = select(Order).options(selectinload(Order.customer), selectinload(Order.line_items))
 
     if status:
         query = query.where(Order.status == status)
@@ -87,6 +100,18 @@ async def list_orders(
             tags=o.tags,
             created_at=o.created_at.isoformat(),
             customer=CustomerSnippet.model_validate(o.customer) if o.customer else None,
+            line_items=[
+                LineItemOut(
+                    id=li.id,
+                    shopify_line_item_id=li.shopify_line_item_id,
+                    sku=li.sku,
+                    product_title=li.product_title,
+                    variant_title=li.variant_title,
+                    quantity=li.quantity,
+                    price=float(li.price) if li.price else None,
+                )
+                for li in o.line_items
+            ],
         ))
 
     return OrdersPage(
