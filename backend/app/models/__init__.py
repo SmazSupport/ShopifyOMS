@@ -8,7 +8,7 @@ from app.models.custom_field import CustomFieldDefinition, MetafieldMapping, Cus
 from app.models.fulfillment import (
     CustomerAddress, ShopifyFulfillment, WebhookLog,
     SkuRule, MysteryRule, CustomerSkuHistory,
-    FieldTransformRule, BundleRule,
+    FieldTransformRule, BundleRule, DerivedFieldValue, RecalculationJob, EntityRelationship,
     OmsOrder, FulfillmentGroup, FulfillmentLine, Hold,
     SkuMaster, BinLocation, Shipment, Package,
 )

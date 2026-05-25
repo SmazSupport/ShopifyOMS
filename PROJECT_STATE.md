@@ -210,3 +210,140 @@ OMS/
 - Redis + Celery background workers
 - Nginx reverse proxy / SSL
 - Multi-tenant isolation (shop_id on User model)
+
+---
+
+## Data Studio Architecture (v2)
+
+> Complete technical spec for derived field system. Full details in `docs/data_studio_architecture.md`
+
+### Core Concepts
+
+**Two-Layer Storage:**
+- **Layer A** — Raw Shopify Data (untouchable source of truth)
+- **Layer B** — Derived Field Values (computed, can be rebuilt)
+
+**Entity Hierarchy:**
+```
+Order
+├── LineItem ──► Variant ──► Product
+│     └── metafields          └── metafields
+│     └── computed_fields     └── computed_fields
+├── Customer
+└── computed_fields (order-level)
+```
+
+### New/Enhanced Models
+
+| Model | Purpose | Key Fields |
+|-------|---------|------------|
+| `FieldTransformRule` (enhanced) | Defines how to compute a derived field | `source_path`, `depends_on`, `recalculation_mode`, `auto_recalc_on_source_change` |
+| `DerivedFieldValue` (new) | Stores computed values for fast reads | `entity_type`, `entity_id`, `value`, `is_stale`, `computed_at` |
+| `RecalculationJob` (new) | Tracks background recalculation work | `scope`, `status`, `progress`, `trigger_type` |
+| `EntityRelationship` (new) | Defines navigable paths between entities | `from_entity`, `to_entity`, `via_field`, `relationship_type` |
+
+### Transform Types
+
+**Single Value:** `extract`, `split`, `chars`, `formula`, `if_then`, `math`, `custom`
+**Cross-Entity:** `lookup`
+**Aggregation:** `aggregate` (unique_concat, concat, sum, count, etc.), `join`
+
+### Recalculation Modes
+
+| Mode | Behavior | Use Case |
+|------|----------|----------|
+| `new_only` | New orders only | Bundle rules that shouldn't touch history |
+| `new_and_open` | New + open/pending orders | Most transforms |
+| `new_and_unfulfilled` | New + all unfulfilled | Shipping-related fields |
+| `new_and_all` | New + all existing (queued) | Bin numbers when changed |
+| `immediate_all` | All orders (blocking) | Small datasets only |
+
+### Execution Engine
+
+```
+RuleExecutionGraph
+├── build_execution_order() — Topological sort by dependencies
+├── compute_for_entity() — Apply all rules to single entity
+├── _resolve_source() — Traverse relationships if needed
+└── _persist_value() — Store to DerivedFieldValue
+
+RecalculationManager
+├── on_rule_created() — Queue job based on mode
+├── on_rule_updated() — Mark stale, queue job
+├── on_source_changed() — Find affected rules, cascade staleness
+└── _cascade_staleness() — Mark dependents for recalc
+```
+
+### Relationship Traversal
+
+**Auto-Inferred:** System detects path via `EntityRelationship` seed data
+**Manual Override:** User can edit path in "Change Path" modal
+**Path Format:** `[{"entity": "variant", "via": "variant_id", "inferred": true}]`
+
+### API Endpoints (Data Studio)
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /api/data-studio/rules` | List all rules with dependencies |
+| `POST /api/data-studio/rules` | Create rule (triggers recalc job) |
+| `GET /api/data-studio/rules/{id}?preview=true` | Get rule with sample preview data |
+| `POST /api/data-studio/rules/test` | Test transform without saving |
+| `GET /api/data-studio/path?from=X&to=Y` | Get auto-inferred path |
+| `POST /api/data-studio/path/validate` | Validate custom path |
+| `GET /api/data-studio/schema` | Get entities, fields, relationships |
+| `GET /api/data-studio/jobs` | List recalculation jobs |
+| `POST /api/data-studio/rules/{id}/recalculate` | Trigger manual recalc |
+| `GET /api/data-studio/values` | Get computed values for entity |
+
+### UI Flow (4-Step Wizard)
+
+1. **Output Location** — Select entity (order/line_item/variant), define field key/label/type
+2. **Select Source** — Pick source entity/field, auto-detect path, preview sample data
+3. **Define Transform** — Choose transform type, configure parameters, live preview
+4. **Recalculation Settings** — Set mode, source change handling, execution order
+
+### Background Worker
+
+Celery/RQ task `process_recalculation_job`:
+- Processes orders in batches (100 at a time)
+- Updates progress for monitoring
+- Handles failures with retry logic
+- Marks job complete/failed when done
+
+### Dependency Resolution
+
+Rules execute in topological order (Kahn's algorithm):
+```
+Level 0: Bin Section (no deps)
+Level 1: Total Units (no deps)
+Level 2: Sections (depends on Bin Section)
+```
+
+### Integration Points
+
+- **Order Ingestion:** Compute derived fields after saving raw data
+- **Orders API:** Include `_derived` object in response
+- **Webhooks:** Trigger recalculation on source metafield changes
+- **Manual Edit:** Queue job based on rule's recalculation_mode
+
+### Migration Path
+
+1. Add new columns to `FieldTransformRule` (source_path, depends_on, etc.)
+2. Create `DerivedFieldValue`, `RecalculationJob`, `EntityRelationship` tables
+3. Seed default entity relationships
+4. Infer source_path for existing rules based on source/output entities
+5. Backfill DerivedFieldValues for existing orders (optional, on-demand)
+
+---
+
+## File Changes Required
+
+| File | Action |
+|------|--------|
+| `backend/app/models/fulfillment.py` | Add new models, enhance FieldTransformRule |
+| `backend/app/utils/rule_engine.py` | Add RuleExecutionGraph, RecalculationManager |
+| `backend/app/routers/data_studio.py` | Create new unified router |
+| `backend/app/main.py` | Register data_studio router |
+| `frontend/src/app/data-studio/` | Enhance UI with wizard, preview, dependency graph |
+| `alembic/versions/` | Create migration for new tables/columns |
+| `docs/data_studio_architecture.md` | Full technical specification |

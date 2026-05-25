@@ -5,7 +5,7 @@ Layer 3: OMS fulfillment decision tables
 Layer 4: Warehouse execution tables
 Layer 5: Sync/logging tables
 """
-from sqlalchemy import String, ForeignKey, Boolean, Numeric, Integer, JSON, Text, DateTime
+from sqlalchemy import String, ForeignKey, Boolean, Numeric, Integer, JSON, Text, DateTime, Index, UniqueConstraint, Any
 from sqlalchemy.orm import mapped_column, Mapped, relationship
 from app.database import Base
 from app.models.base import TimestampMixin, gen_uuid
@@ -126,16 +126,28 @@ class FieldTransformRule(Base, TimestampMixin):
     name: Mapped[str] = mapped_column(String, nullable=False)
     source_entity: Mapped[str] = mapped_column(String, nullable=False, index=True)
     source_field: Mapped[str] = mapped_column(String, nullable=False)
+    source_path: Mapped[list | None] = mapped_column(JSON, nullable=True)
     transform_type: Mapped[str] = mapped_column(String, nullable=False)
     transform_config: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     output_field_key: Mapped[str] = mapped_column(String, nullable=False, index=True)
     output_field_label: Mapped[str] = mapped_column(String, nullable=False)
     output_entity: Mapped[str] = mapped_column(String, nullable=False)
+    output_field_type: Mapped[str] = mapped_column(String, default="string", server_default="string")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
     run_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    depends_on: Mapped[list | None] = mapped_column(JSON, nullable=True, default=list)
+    recalculation_mode: Mapped[str] = mapped_column(String, default="new_only", server_default="new_only")
+    auto_recalc_on_source_change: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String, nullable=True)
 
     shop: Mapped["Shop"] = relationship("Shop")  # type: ignore[name-defined]
+    derived_values: Mapped[list["DerivedFieldValue"]] = relationship(
+        "DerivedFieldValue", back_populates="rule", cascade="all, delete-orphan"
+    )
+    recalculation_jobs: Mapped[list["RecalculationJob"]] = relationship(
+        "RecalculationJob", back_populates="rule", cascade="all, delete-orphan"
+    )
 
 
 class BundleRule(Base, TimestampMixin):
@@ -262,6 +274,75 @@ class Hold(Base, TimestampMixin):
 # ─────────────────────────────────────────────────────────────────
 # LAYER 4 — Warehouse Execution Tables
 # ─────────────────────────────────────────────────────────────────
+
+class DerivedFieldValue(Base, TimestampMixin):
+    """
+    Layer B — Stores computed derived field values for fast retrieval.
+    Can be rebuilt from Layer A (raw Shopify data) + FieldTransformRules.
+    """
+    __tablename__ = "derived_field_values"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=gen_uuid)
+    shop_id: Mapped[str] = mapped_column(String, ForeignKey("shops.id"), nullable=False, index=True)
+    rule_id: Mapped[str] = mapped_column(String, ForeignKey("field_transform_rules.id"), nullable=False, index=True)
+    entity_type: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    entity_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    value: Mapped[Any] = mapped_column(JSON, nullable=True)
+    computed_at: Mapped[str] = mapped_column(String, nullable=False)
+    source_version: Mapped[str | None] = mapped_column(String, nullable=True)
+    is_stale: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+
+    shop: Mapped["Shop"] = relationship("Shop")  # type: ignore[name-defined]
+    rule: Mapped["FieldTransformRule"] = relationship("FieldTransformRule", back_populates="derived_values")
+
+    __table_args__ = (
+        UniqueConstraint('rule_id', 'entity_type', 'entity_id', name='uix_derived_value'),
+        Index('ix_derived_entity', 'entity_type', 'entity_id'),
+        Index('ix_derived_stale', 'is_stale', 'rule_id'),
+    )
+
+
+class RecalculationJob(Base, TimestampMixin):
+    """
+    Tracks background recalculation work for derived fields.
+    """
+    __tablename__ = "recalculation_jobs"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=gen_uuid)
+    shop_id: Mapped[str] = mapped_column(String, ForeignKey("shops.id"), nullable=False, index=True)
+    trigger_type: Mapped[str] = mapped_column(String, nullable=False)
+    rule_id: Mapped[str] = mapped_column(String, ForeignKey("field_transform_rules.id"), nullable=False, index=True)
+    scope: Mapped[str] = mapped_column(String, nullable=False)
+    specific_order_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    status: Mapped[str] = mapped_column(String, default="pending", index=True)
+    total_orders: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    processed_orders: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    failed_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    started_at: Mapped[str | None] = mapped_column(String, nullable=True)
+    completed_at: Mapped[str | None] = mapped_column(String, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_details: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    triggered_by: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    shop: Mapped["Shop"] = relationship("Shop")  # type: ignore[name-defined]
+    rule: Mapped["FieldTransformRule"] = relationship("FieldTransformRule", back_populates="recalculation_jobs")
+
+
+class EntityRelationship(Base, TimestampMixin):
+    """
+    Defines navigable relationships between entities for path resolution.
+    """
+    __tablename__ = "entity_relationships"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=gen_uuid)
+    from_entity: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    to_entity: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    via_field: Mapped[str] = mapped_column(String, nullable=False)
+    reverse_via: Mapped[str | None] = mapped_column(String, nullable=True)
+    relationship_type: Mapped[str] = mapped_column(String, default="many_to_one")
+    description: Mapped[str | None] = mapped_column(String, nullable=True)
+    is_system: Mapped[bool] = mapped_column(Boolean, default=True)
+
 
 class SkuMaster(Base, TimestampMixin):
     """

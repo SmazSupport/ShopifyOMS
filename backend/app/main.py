@@ -10,6 +10,7 @@ from app.routers import fields
 from app.routers import settings as settings_router
 from app.routers import users
 from app.routers import rules
+from app.routers import data_studio
 
 app = FastAPI(
     title="OMS API",
@@ -34,3 +35,4 @@ app.include_router(fields.router)
 app.include_router(settings_router.router)
 app.include_router(users.router)
 app.include_router(rules.router)
+app.include_router(data_studio.router)
