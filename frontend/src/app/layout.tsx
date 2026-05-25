@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "OMS – Order Management System",
-  description: "Internal OMS for The Woobles",
+  description: "Internal Order Management System",
 };
 
 export default function RootLayout({
