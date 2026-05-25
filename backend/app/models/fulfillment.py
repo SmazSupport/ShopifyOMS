@@ -111,6 +111,56 @@ class MysteryRule(Base, TimestampMixin):
     shop: Mapped["Shop"] = relationship("Shop")  # type: ignore[name-defined]
 
 
+class FieldTransformRule(Base, TimestampMixin):
+    """
+    Layer 2: No-code computed field rules.
+    Defines how to derive a new OMS field from an existing source field.
+    e.g. bin_number 'A5C' → bin_section = first alpha chars = 'A'
+    transform_type: extract_pattern | split | formula | custom_js | if_then
+    transform_config: JSON blob interpreted by the rule engine per transform_type
+    """
+    __tablename__ = "field_transform_rules"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=gen_uuid)
+    shop_id: Mapped[str] = mapped_column(String, ForeignKey("shops.id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    source_entity: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    source_field: Mapped[str] = mapped_column(String, nullable=False)
+    transform_type: Mapped[str] = mapped_column(String, nullable=False)
+    transform_config: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    output_field_key: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    output_field_label: Mapped[str] = mapped_column(String, nullable=False)
+    output_entity: Mapped[str] = mapped_column(String, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
+    run_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    shop: Mapped["Shop"] = relationship("Shop")  # type: ignore[name-defined]
+
+
+class BundleRule(Base, TimestampMixin):
+    """
+    Layer 2: Bundle explosion rules.
+    Defines that a parent SKU should be exploded into child SKUs when an order is ingested.
+    child_skus: [{"sku": "CHILD-A", "quantity": 1}, ...]
+    ships_together: if True, all children in one group. If False, each can ship independently.
+    """
+    __tablename__ = "bundle_rules"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=gen_uuid)
+    shop_id: Mapped[str] = mapped_column(String, ForeignKey("shops.id"), nullable=False, index=True)
+    parent_sku: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    bundle_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    child_skus: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    ships_together: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
+    allow_partial_ship: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
+    notify_shopify_as_parent: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    shop: Mapped["Shop"] = relationship("Shop")  # type: ignore[name-defined]
+
+
 class CustomerSkuHistory(Base, TimestampMixin):
     """Tracks which SKUs a customer has already received — used for mystery item selection."""
     __tablename__ = "customer_sku_history"

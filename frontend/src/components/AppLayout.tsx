@@ -18,6 +18,7 @@ const NAV = [
   { href: "/orders", label: "Orders" },
   { href: "/products", label: "Products" },
   { href: "/fields", label: "Fields & Mappings" },
+  { href: "/rules", label: "Rules Engine" },
   { href: "/settings/fields", label: "Field Settings" },
   { href: "/users", label: "Users", superuser: true },
   { href: "/profile", label: "My Profile" },
