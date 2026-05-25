@@ -6,26 +6,104 @@ import AppLayout from "@/components/AppLayout";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
-// ─── Types ─────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// DATA STUDIO V2 - UNIFIED DERIVED FIELD SYSTEM
+// ═══════════════════════════════════════════════════════════════════════════════
 
 type EntityType = "order" | "line_item" | "variant" | "product" | "customer";
+type TransformType = "extract" | "split" | "formula" | "if_then" | "custom_js" | "lookup" | "aggregate" | "join" | "math" | "first_alpha" | "first_numeric" | "extract_pattern" | "chars";
+type RecalcMode = "new_only" | "new_and_open" | "new_and_unfulfilled" | "new_and_all" | "immediate_all";
+type JobStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
+
+interface SourcePathStep {
+  entity: EntityType;
+  via: string;
+  inferred: boolean;
+}
+
+// Main derived field rule
+interface DerivedFieldRule {
+  id: string;
+  name: string;
+  source_entity: EntityType;
+  source_field: string;
+  source_path?: SourcePathStep[];
+  transform_type: TransformType;
+  transform_config: Record<string, any>;
+  output_entity: EntityType;
+  output_field_key: string;
+  output_field_label: string;
+  output_field_type: "string" | "number" | "boolean" | "date" | "json";
+  run_order: number;
+  depends_on?: string[];
+  recalculation_mode: RecalcMode;
+  auto_recalc_on_source_change: boolean;
+  is_active: boolean;
+  notes?: string;
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// Entity schema from API
+interface EntitySchema {
+  native_fields: string[];
+  computed_fields?: Array<{key: string; label: string; type: string}>;
+  metafields_namespace?: string;
+  relationships: string[];
+}
+
+interface SchemaResponse {
+  entities: Record<EntityType, EntitySchema>;
+}
+
+// Recalculation job
+interface RecalcJob {
+  id: string;
+  trigger_type: string;
+  rule_id: string;
+  rule_name?: string;
+  scope: string;
+  status: JobStatus;
+  total_orders?: number;
+  processed_orders?: number;
+  failed_count?: number;
+  started_at?: string;
+  completed_at?: string;
+  error_message?: string;
+  triggered_by?: string;
+  created_at: string;
+}
+
+// Preview/test result
+interface PreviewResult {
+  source: unknown;
+  output: unknown;
+  success: boolean;
+  error?: string;
+}
+
+// Path resolution response
+interface PathResponse {
+  path: SourcePathStep[];
+  alternatives: SourcePathStep[][];
+  available_fields: string[];
+  valid: boolean;
+  errors?: string[];
+}
+
+// Legacy support for backward compatibility
 type TopTab = "fields" | "transforms" | "bundles" | "sku_rules" | "mystery";
 
+interface FieldTransformRule extends DerivedFieldRule {}
+
+// Legacy types for old UI components
 interface CustomField {
   id: string; entity_type: string; name: string; key: string;
   field_type: string; description: string | null;
   mapping: { id: string; shopify_namespace: string; shopify_key: string } | null;
 }
-interface FieldSetting {
-  id: string; entity_type: string; field_key: string; field_label: string | null;
-  is_enabled: boolean; display_order: number; category: string | null; is_system: boolean;
-}
-interface FieldTransformRule {
-  id: string; name: string; source_entity: string; source_field: string;
-  transform_type: string; transform_config: Record<string, unknown>;
-  output_field_key: string; output_field_label: string; output_entity: string;
-  is_active: boolean; run_order: number; notes?: string;
-}
+
 interface BundleChild { sku: string; quantity: number; }
 interface BundleRule {
   id: string; parent_sku: string; bundle_name?: string;
@@ -35,17 +113,33 @@ interface BundleRule {
   companion_skus?: string[];
   is_active: boolean; notes?: string;
 }
+
 interface SkuRule {
   id: string; sku: string; ships_alone: boolean; ships_alone_reason?: string;
   companion_skus?: string[];
   is_preorder: boolean; preorder_release_date?: string;
   allow_partial_ship: boolean; hold_reason?: string; is_active: boolean; notes?: string;
 }
+
 interface MysteryRule {
   id: string; mystery_sku: string; eligible_skus: string[];
   selection_strategy: string; fallback_sku?: string;
   exclude_if_previously_received: boolean; is_active: boolean; notes?: string;
 }
+
+interface FieldSetting {
+  id: string; entity_type: string; field_key: string; field_label: string | null;
+  is_enabled: boolean; display_order: number; category: string | null; is_system: boolean;
+}
+
+// Legacy tab config
+const TAB_CONFIG: { key: TopTab; label: string; accent: string }[] = [
+  { key: "fields",     label: "Fields & Mappings",  accent: "text-blue-600 border-blue-600" },
+  { key: "transforms", label: "Transforms",          accent: "text-indigo-600 border-indigo-600" },
+  { key: "bundles",    label: "Bundles",             accent: "text-emerald-600 border-emerald-600" },
+  { key: "sku_rules",  label: "SKU Rules",           accent: "text-orange-600 border-orange-600" },
+  { key: "mystery",    label: "Mystery Items",       accent: "text-purple-600 border-purple-600" },
+];
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 
@@ -58,30 +152,43 @@ const ENTITIES: { key: EntityType; label: string; color: string; dot: string }[]
 ];
 
 const TRANSFORM_TYPES = [
-  { value: "first_alpha",      label: "First alpha chars" },
-  { value: "first_numeric",    label: "First numeric chars" },
-  { value: "chars",            label: "Substring (start/end)" },
-  { value: "split",            label: "Split on delimiter" },
-  { value: "if_then",          label: "IF … THEN … ELSE" },
-  { value: "formula",          label: "Formula (LEFT/RIGHT/MID…)" },
-  { value: "extract_pattern",  label: "Regex extract" },
-  { value: "custom_js",        label: "Custom expression" },
+  { value: "extract",         label: "Extract / Substring",    category: "Basic" },
+  { value: "split",           label: "Split on Delimiter",     category: "Basic" },
+  { value: "first_alpha",     label: "First Alpha Characters", category: "Basic" },
+  { value: "first_numeric",   label: "First Numeric Characters", category: "Basic" },
+  { value: "chars",           label: "Substring (Start/End)",  category: "Basic" },
+  { value: "extract_pattern", label: "Regex Pattern Extract",  category: "Advanced" },
+  { value: "if_then",         label: "Conditional (IF/THEN)", category: "Logic" },
+  { value: "formula",         label: "Formula Engine",        category: "Advanced" },
+  { value: "lookup",          label: "Cross-Entity Lookup",   category: "Advanced" },
+  { value: "aggregate",       label: "Aggregate (SUM/AVG/etc)", category: "Advanced" },
+  { value: "join",            label: "Join Fields",           category: "Advanced" },
+  { value: "math",            label: "Math Operations",       category: "Advanced" },
+  { value: "custom_js",       label: "Custom Expression",     category: "Advanced" },
 ];
 
-const FIELD_TYPES = ["text", "number", "boolean", "date", "json"];
+const OUTPUT_FIELD_TYPES = [
+  { value: "string",  label: "Text" },
+  { value: "number",  label: "Number" },
+  { value: "boolean", label: "Yes/No" },
+  { value: "date",    label: "Date" },
+  { value: "json",    label: "JSON" },
+];
 
+const RECALC_MODES = [
+  { value: "new_only",             label: "New orders only",              description: "Only apply to new orders going forward" },
+  { value: "new_and_open",         label: "New + Open orders",            description: "Apply to new orders and existing open orders" },
+  { value: "new_and_unfulfilled",  label: "New + Unfulfilled orders",     description: "Apply to new orders and all unfulfilled orders" },
+  { value: "new_and_all",          label: "New + All orders",             description: "Apply to all orders in background job" },
+  { value: "immediate_all",        label: "Immediate on all orders",      description: "Apply immediately to all orders (may be slow)" },
+];
+
+// Legacy tabs for backward compatibility (hidden in v2 mode)
+const FIELD_TYPES = ["text", "number", "boolean", "date", "json"];
 const STRATEGIES = [
   { value: "exclude_previously_shipped", label: "Exclude items already received by customer" },
   { value: "random",      label: "Random from pool" },
   { value: "sequential",  label: "Sequential round-robin" },
-];
-
-const TAB_CONFIG: { key: TopTab; label: string; accent: string }[] = [
-  { key: "fields",     label: "Fields & Mappings",  accent: "text-blue-600 border-blue-600" },
-  { key: "transforms", label: "Transforms",          accent: "text-indigo-600 border-indigo-600" },
-  { key: "bundles",    label: "Bundles",             accent: "text-emerald-600 border-emerald-600" },
-  { key: "sku_rules",  label: "SKU Rules",           accent: "text-orange-600 border-orange-600" },
-  { key: "mystery",    label: "Mystery Items",       accent: "text-purple-600 border-purple-600" },
 ];
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
@@ -185,7 +292,7 @@ function SaveBar({ onSave, onCancel, saving, disabled }: {
 
 // ─── Transform Config Sub-form ─────────────────────────────────────────────
 
-function TransformConfig({ type, config, onChange }: {
+function TransformConfigPanel({ type, config, onChange }: {
   type: string; config: Record<string, unknown>; onChange: (c: Record<string, unknown>) => void;
 }) {
   const set = (k: string, v: unknown) => onChange({ ...config, [k]: v });
@@ -401,7 +508,7 @@ function TransformPanel({ rule, onSave, onClose, onDelete }: {
 
       <div className="bg-gray-50 rounded-lg p-3 space-y-3">
         <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Configure</p>
-        <TransformConfig type={form.transform_type ?? "first_alpha"} config={form.transform_config ?? {}} onChange={c => set("transform_config", c)} />
+        <TransformConfigPanel type={form.transform_type ?? "first_alpha"} config={form.transform_config ?? {}} onChange={(c: Record<string, unknown>) => set("transform_config", c)} />
       </div>
 
       <LivePreview type={form.transform_type ?? ""} config={form.transform_config ?? {}} />
@@ -1177,17 +1284,503 @@ export default function DataStudioPage() {
     return res.json();
   }, [router]);
 
+  // ═══════════════════════════════════════════════════════════════════════════════
+  // DATA STUDIO V2 STATE
+  // ═══════════════════════════════════════════════════════════════════════════════
+
+  const [v2Mode, setV2Mode] = useState(true); // Default to new v2 UI
+  const [schema, setSchema] = useState<SchemaResponse | null>(null);
+  const [derivedRules, setDerivedRules] = useState<DerivedFieldRule[]>([]);
+  const [recalcJobs, setRecalcJobs] = useState<RecalcJob[]>([]);
+  const [selectedRule, setSelectedRule] = useState<DerivedFieldRule | null>(null);
+  const [isCreating, setIsCreating] = useState(false);
+  const [previewResults, setPreviewResults] = useState<PreviewResult[]>([]);
+  const [availableFields, setAvailableFields] = useState<string[]>([]);
+  const [sourcePath, setSourcePath] = useState<SourcePathStep[]>([]);
+  const [showJobsPanel, setShowJobsPanel] = useState(false);
+
+  // Form state for creating/editing rules
+  const [formState, setFormState] = useState<Partial<DerivedFieldRule>>({
+    source_entity: "variant",
+    output_entity: "line_item",
+    transform_type: "extract",
+    transform_config: {},
+    output_field_type: "string",
+    recalculation_mode: "new_only",
+    auto_recalc_on_source_change: true,
+    is_active: true,
+  });
+
+  // Load schema on mount
+  useEffect(() => {
+    if (!v2Mode) return;
+    api("/data-studio/schema").then((data) => setSchema(data as SchemaResponse));
+  }, [api, v2Mode]);
+
+  // Load derived rules on mount
+  useEffect(() => {
+    if (!v2Mode) return;
+    api("/data-studio/rules").then((data) => setDerivedRules(data as DerivedFieldRule[]));
+  }, [api, v2Mode]);
+
+  // Load recalc jobs
+  useEffect(() => {
+    if (!v2Mode || !showJobsPanel) return;
+    api("/data-studio/jobs").then((data) => setRecalcJobs(data as RecalcJob[]));
+  }, [api, v2Mode, showJobsPanel]);
+
+  // Fetch available fields when source entity changes
+  useEffect(() => {
+    if (!v2Mode || !formState.source_entity || !schema) return;
+    const entitySchema = schema.entities[formState.source_entity];
+    if (entitySchema) {
+      const fields = [...entitySchema.native_fields];
+      if (entitySchema.computed_fields) {
+        fields.push(...entitySchema.computed_fields.map(f => f.key));
+      }
+      setAvailableFields(fields);
+    }
+  }, [v2Mode, formState.source_entity, schema]);
+
+  // Resolve source path when entities change
+  useEffect(() => {
+    if (!v2Mode || !formState.output_entity || !formState.source_entity) return;
+    if (formState.output_entity === formState.source_entity) {
+      setSourcePath([]);
+      return;
+    }
+    api(`/data-studio/path?from_entity=${formState.output_entity}&to_entity=${formState.source_entity}`)
+      .then((data) => {
+        const pathData = data as PathResponse;
+        setSourcePath(pathData.path);
+      });
+  }, [v2Mode, formState.output_entity, formState.source_entity, api]);
+
+  // Test transform preview
+  const testPreview = useCallback(async () => {
+    if (!formState.source_field || !formState.transform_type) return;
+    const res = await api("/data-studio/rules/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        source_entity: formState.source_entity,
+        source_field: formState.source_field,
+        source_path: sourcePath,
+        transform_type: formState.transform_type,
+        transform_config: formState.transform_config,
+      }),
+    });
+    setPreviewResults(res as PreviewResult[]);
+  }, [api, formState, sourcePath]);
+
+  // Save rule
+  const saveRule = useCallback(async () => {
+    const method = selectedRule ? "PUT" : "POST";
+    const path = selectedRule ? `/data-studio/rules/${selectedRule.id}` : "/data-studio/rules";
+    const res = await api(path, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...formState,
+        source_path: sourcePath,
+      }),
+    });
+    // Refresh rules list
+    const updated = await api("/data-studio/rules");
+    setDerivedRules(updated as DerivedFieldRule[]);
+    setIsCreating(false);
+    setSelectedRule(null);
+    return res;
+  }, [api, formState, selectedRule, sourcePath]);
+
+  // Delete rule
+  const deleteRule = useCallback(async (id: string) => {
+    await api(`/data-studio/rules/${id}`, { method: "DELETE" });
+    setDerivedRules(prev => prev.filter(r => r.id !== id));
+  }, [api]);
+
+  // Trigger recalculation
+  const triggerRecalc = useCallback(async (ruleId: string) => {
+    await api(`/data-studio/rules/${ruleId}/recalculate`, { method: "POST" });
+    setShowJobsPanel(true);
+  }, [api]);
+
   const tabCounts: Partial<Record<TopTab, number>> = {};
+
+  // ═══════════════════════════════════════════════════════════════════════════════
+  // V2 UI - New Data Studio
+  // ═══════════════════════════════════════════════════════════════════════════════
+
+  if (v2Mode) {
+    return (
+      <AppLayout>
+        <div className="space-y-4 h-full">
+          {/* V2 Header */}
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-xl font-bold text-gray-900">Data Studio</h1>
+              <p className="text-sm text-gray-500 mt-1">
+                Create derived fields with automatic relationship resolution and live preview
+              </p>
+            </div>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setShowJobsPanel(!showJobsPanel)}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
+              >
+                Jobs ({recalcJobs.length})
+              </button>
+              <button
+                onClick={() => setV2Mode(false)}
+                className="px-3 py-2 text-xs text-gray-500 hover:text-gray-700"
+              >
+                Legacy Mode
+              </button>
+              <button
+                onClick={() => {
+                  setIsCreating(true);
+                  setSelectedRule(null);
+                  setFormState({
+                    source_entity: "variant",
+                    output_entity: "line_item",
+                    transform_type: "extract",
+                    transform_config: {},
+                    output_field_type: "string",
+                    recalculation_mode: "new_only",
+                    auto_recalc_on_source_change: true,
+                    is_active: true,
+                  });
+                }}
+                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700"
+              >
+                + New Derived Field
+              </button>
+            </div>
+          </div>
+
+          <div className="flex gap-6 h-[calc(100vh-180px)]">
+            {/* Left sidebar - Rules list */}
+            <div className="w-80 flex-shrink-0 space-y-3 overflow-y-auto">
+              <h3 className="text-sm font-semibold text-gray-900 px-1">Derived Fields ({derivedRules.length})</h3>
+              {derivedRules.map((rule) => (
+                <div
+                  key={rule.id}
+                  onClick={() => {
+                    setSelectedRule(rule);
+                    setFormState(rule);
+                    setIsCreating(false);
+                  }}
+                  className={`p-3 rounded-lg border cursor-pointer transition-colors ${
+                    selectedRule?.id === rule.id
+                      ? "border-blue-500 bg-blue-50"
+                      : "border-gray-200 hover:border-gray-300"
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium text-sm text-gray-900">{rule.name}</span>
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${rule.is_active ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-600"}`}>
+                      {rule.is_active ? "Active" : "Inactive"}
+                    </span>
+                  </div>
+                  <div className="mt-2 text-xs text-gray-500">
+                    {rule.source_entity}.{rule.source_field} → {rule.transform_type} → {rule.output_entity}.{rule.output_field_key}
+                  </div>
+                  <div className="mt-1 text-xs text-gray-400">
+                    Mode: {rule.recalculation_mode}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Main content - Rule editor or empty state */}
+            <div className="flex-1 overflow-y-auto">
+              {isCreating || selectedRule ? (
+                <div className="space-y-6 max-w-2xl">
+                  {/* Rule name */}
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-gray-700">Rule Name</label>
+                    <input
+                      type="text"
+                      value={formState.name || ""}
+                      onChange={(e) => setFormState({ ...formState, name: e.target.value })}
+                      placeholder="e.g., Extract Bin Number from Variant"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+
+                  {/* Source Section */}
+                  <div className="p-4 bg-gray-50 rounded-lg space-y-4">
+                    <h3 className="text-sm font-semibold text-gray-900">Source</h3>
+
+                    {/* Source Entity */}
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-gray-700">Source Entity</label>
+                      <select
+                        value={formState.source_entity}
+                        onChange={(e) => setFormState({ ...formState, source_entity: e.target.value as EntityType, source_field: "" })}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                      >
+                        {ENTITIES.map((e) => (
+                          <option key={e.key} value={e.key}>{e.label}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Source Path Visualization */}
+                    {sourcePath.length > 0 && (
+                      <div className="flex items-center gap-2 text-sm">
+                        <span className="text-gray-500">Path:</span>
+                        <span className="font-medium text-gray-900">{formState.output_entity}</span>
+                        {sourcePath.map((step, idx) => (
+                          <span key={idx} className="flex items-center gap-2">
+                            <span className="text-gray-400">→</span>
+                            <span className="font-medium text-gray-900">{step.entity}</span>
+                            <span className="text-xs text-gray-500">(via {step.via})</span>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Source Field - NOW A DROPDOWN! */}
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-gray-700">Source Field</label>
+                      <select
+                        value={formState.source_field || ""}
+                        onChange={(e) => setFormState({ ...formState, source_field: e.target.value })}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                      >
+                        <option value="">Select a field...</option>
+                        {availableFields.map((field) => (
+                          <option key={field} value={field}>{field}</option>
+                        ))}
+                      </select>
+                      <p className="text-xs text-gray-500">
+                        Fields loaded from {formState.source_entity} schema
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Transform Section */}
+                  <div className="p-4 bg-gray-50 rounded-lg space-y-4">
+                    <h3 className="text-sm font-semibold text-gray-900">Transform</h3>
+
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-gray-700">Transform Type</label>
+                      <select
+                        value={formState.transform_type}
+                        onChange={(e) => setFormState({ ...formState, transform_type: e.target.value as TransformType })}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                      >
+                        {TRANSFORM_TYPES.map((t) => (
+                          <option key={t.value} value={t.value}>{t.label}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Transform Config - Simplified for now */}
+                    <TransformConfigPanel
+                      type={formState.transform_type || "extract"}
+                      config={formState.transform_config || {}}
+                      onChange={(config) => setFormState({ ...formState, transform_config: config })}
+                    />
+                  </div>
+
+                  {/* Output Section */}
+                  <div className="p-4 bg-gray-50 rounded-lg space-y-4">
+                    <h3 className="text-sm font-semibold text-gray-900">Output</h3>
+
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-gray-700">Output Entity</label>
+                      <select
+                        value={formState.output_entity}
+                        onChange={(e) => setFormState({ ...formState, output_entity: e.target.value as EntityType })}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                      >
+                        {ENTITIES.map((e) => (
+                          <option key={e.key} value={e.key}>{e.label}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-gray-700">Output Field Key</label>
+                      <input
+                        type="text"
+                        value={formState.output_field_key || ""}
+                        onChange={(e) => setFormState({ ...formState, output_field_key: e.target.value })}
+                        placeholder="e.g., bin_number"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-gray-700">Output Field Label</label>
+                      <input
+                        type="text"
+                        value={formState.output_field_label || ""}
+                        onChange={(e) => setFormState({ ...formState, output_field_label: e.target.value })}
+                        placeholder="e.g., Bin Number"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-gray-700">Output Type</label>
+                      <select
+                        value={formState.output_field_type}
+                        onChange={(e) => setFormState({ ...formState, output_field_type: e.target.value as any })}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                      >
+                        {OUTPUT_FIELD_TYPES.map((t) => (
+                          <option key={t.value} value={t.value}>{t.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Recalculation Settings */}
+                  <div className="p-4 bg-gray-50 rounded-lg space-y-4">
+                    <h3 className="text-sm font-semibold text-gray-900">Recalculation</h3>
+
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-gray-700">When to apply</label>
+                      <select
+                        value={formState.recalculation_mode}
+                        onChange={(e) => setFormState({ ...formState, recalculation_mode: e.target.value as RecalcMode })}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                      >
+                        {RECALC_MODES.map((m) => (
+                          <option key={m.value} value={m.value}>{m.label}</option>
+                        ))}
+                      </select>
+                      <p className="text-xs text-gray-500">
+                        {RECALC_MODES.find(m => m.value === formState.recalculation_mode)?.description}
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="checkbox"
+                        id="auto_recalc"
+                        checked={formState.auto_recalc_on_source_change}
+                        onChange={(e) => setFormState({ ...formState, auto_recalc_on_source_change: e.target.checked })}
+                        className="rounded border-gray-300"
+                      />
+                      <label htmlFor="auto_recalc" className="text-sm text-gray-700">
+                        Auto-recalculate when source data changes
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Live Preview */}
+                  <div className="p-4 bg-blue-50 rounded-lg space-y-4">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-sm font-semibold text-blue-900">Live Preview</h3>
+                      <button
+                        onClick={testPreview}
+                        disabled={!formState.source_field}
+                        className="px-3 py-1 text-xs font-medium text-blue-700 bg-blue-100 rounded hover:bg-blue-200 disabled:opacity-50"
+                      >
+                        Test Transform
+                      </button>
+                    </div>
+
+                    {previewResults.length > 0 ? (
+                      <div className="space-y-2">
+                        {previewResults.slice(0, 3).map((result, idx) => (
+                          <div key={idx} className="flex items-center gap-4 text-sm">
+                            <span className="text-gray-600">Input: {String(result.source)}</span>
+                            <span className="text-gray-400">→</span>
+                            <span className={`font-medium ${result.success ? "text-green-700" : "text-red-600"}`}>
+                              {result.success ? String(result.output) : `Error: ${result.error}`}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-blue-600">
+                        Click "Test Transform" to preview with sample data
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Action Buttons */}
+                  <div className="flex gap-3 pt-4">
+                    <button
+                      onClick={saveRule}
+                      disabled={!formState.name || !formState.source_field}
+                      className="flex-1 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                    >
+                      {selectedRule ? "Update Rule" : "Create Rule"}
+                    </button>
+                    {selectedRule && (
+                      <>
+                        <button
+                          onClick={() => triggerRecalc(selectedRule.id)}
+                          className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100"
+                        >
+                          Recalculate
+                        </button>
+                        <button
+                          onClick={() => deleteRule(selectedRule.id)}
+                          className="px-4 py-2 text-sm font-medium text-red-700 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100"
+                        >
+                          Delete
+                        </button>
+                      </>
+                    )}
+                    <button
+                      onClick={() => {
+                        setIsCreating(false);
+                        setSelectedRule(null);
+                      }}
+                      className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-col items-center justify-center h-full text-center">
+                  <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mb-4">
+                    <svg className="w-8 h-8 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                    </svg>
+                  </div>
+                  <h3 className="text-lg font-medium text-gray-900 mb-2">No field selected</h3>
+                  <p className="text-sm text-gray-500 max-w-md mb-4">
+                    Select an existing derived field from the sidebar or click "New Derived Field" to create one.
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </AppLayout>
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════════
+  // LEGACY UI - Old tab-based interface (fallback)
+  // ═══════════════════════════════════════════════════════════════════════════════
 
   return (
     <AppLayout>
       <div className="space-y-6">
         {/* Header */}
-        <div>
-          <h1 className="text-xl font-bold text-gray-900">Data Studio</h1>
-          <p className="text-sm text-gray-500 mt-1">
-            Manage your data pipeline — custom fields, metafield mappings, transform rules, bundle explosion, SKU shipping rules, and mystery substitution
-          </p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-xl font-bold text-gray-900">Data Studio</h1>
+            <p className="text-sm text-gray-500 mt-1">
+              Manage your data pipeline — custom fields, metafield mappings, transform rules, bundle explosion, SKU shipping rules, and mystery substitution
+            </p>
+          </div>
+          <button
+            onClick={() => setV2Mode(true)}
+            className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100"
+          >
+            Try New Data Studio v2
+          </button>
         </div>
 
         {/* Tab bar */}
@@ -1203,10 +1796,6 @@ export default function DataStudioPage() {
               )}
             </button>
           ))}
-          {/* Field Settings as a secondary tab */}
-          <button onClick={() => setTab("fields" as TopTab)}
-            className="ml-auto px-5 py-3 text-sm font-medium border-b-2 border-transparent text-gray-400 hover:text-gray-700">
-          </button>
         </div>
 
         {/* Tab content */}
