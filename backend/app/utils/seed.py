@@ -145,10 +145,15 @@ async def seed():
                 db.add(product)
                 await db.flush()
 
-                # Generate variant data with metafields and dimensions
-                profile = get_dimension_profile()
-                bin_number = generate_bin_number()
-
+            # Check if variant exists, create or update with metafields and dimensions
+            existing_var = await db.execute(select(Variant).where(Variant.sku == sku))
+            variant = existing_var.scalar_one_or_none()
+            
+            # Generate variant data with metafields and dimensions
+            profile = get_dimension_profile()
+            bin_number = generate_bin_number()
+            
+            if not variant:
                 variant = Variant(
                     product_id=product.id,
                     shopify_variant_id=random_shopify_id(),
@@ -156,24 +161,26 @@ async def seed():
                     title="Default Title",
                     price=str(price),
                     inventory_quantity=str(random.randint(10, 200)),
-                    grams=profile["grams"],
-                    weight=profile["weight_oz"],
-                    weight_unit="oz",
-                    length=profile["length"],
-                    width=profile["width"],
-                    height=profile["height"],
-                    shipping_unit=profile["shipping_unit"],
-                    metafields={
-                        "custom": {
-                            "bin_number": bin_number,
-                            "bin_section": bin_number[0],
-                            "bin_column": int(bin_number[1:-1]),
-                            "bin_row": bin_number[-1],
-                        }
-                    },
                 )
                 db.add(variant)
-                await db.flush()
+            
+            # Always update these fields (for existing or new variants)
+            variant.grams = profile["grams"]
+            variant.weight = profile["weight_oz"]
+            variant.weight_unit = "oz"
+            variant.length = profile["length"]
+            variant.width = profile["width"]
+            variant.height = profile["height"]
+            variant.shipping_unit = profile["shipping_unit"]
+            variant.metafields = {
+                "custom": {
+                    "bin_number": bin_number,
+                    "bin_section": bin_number[0],
+                    "bin_column": int(bin_number[1:-1]),
+                    "bin_row": bin_number[-1],
+                }
+            }
+            await db.flush()
             products.append((product, sku, title, price))
 
         print(f"Products seeded: {len(products)}")
