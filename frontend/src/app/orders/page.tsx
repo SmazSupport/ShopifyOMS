@@ -1,10 +1,169 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import AppLayout from "@/components/AppLayout";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
+// ─────────────────────────────────────────────────────────────
+// FILTER BUILDER TYPES & CONFIG
+// ─────────────────────────────────────────────────────────────
+type FilterOp = "=" | "!=" | "contains" | "not_contains" | ">" | "<" | ">=" | "<=" | "is_empty" | "is_not_empty";
+
+interface FilterRow {
+  id: string;
+  field: string;
+  op: FilterOp;
+  value: string;
+}
+
+const FILTER_FIELDS = [
+  // Order fields
+  { key: "order_number",       label: "Order #",          type: "text",   group: "Order" },
+  { key: "status",             label: "Status",           type: "select", group: "Order", options: ["open","fulfilled","on_hold","cancelled"] },
+  { key: "fulfillment_status", label: "Fulfillment",      type: "select", group: "Order", options: ["unfulfilled","partial","fulfilled"] },
+  { key: "financial_status",   label: "Payment",          type: "select", group: "Order", options: ["paid","pending","refunded","voided"] },
+  { key: "total_price",        label: "Total ($)",        type: "number", group: "Order" },
+  { key: "item_count",         label: "Item Count",       type: "number", group: "Order" },
+  { key: "email",              label: "Email",            type: "text",   group: "Order" },
+  { key: "tags",               label: "Tags",             type: "text",   group: "Order" },
+  { key: "payment_gateway",    label: "Gateway",          type: "text",   group: "Order" },
+  { key: "source_name",        label: "Source",           type: "text",   group: "Order" },
+  { key: "note",               label: "Note",             type: "text",   group: "Order" },
+  { key: "created_at",         label: "Created",          type: "date",   group: "Order" },
+  { key: "processed_at",       label: "Processed",        type: "date",   group: "Order" },
+  // Customer fields
+  { key: "customer_name",      label: "Customer Name",    type: "text",   group: "Customer" },
+  { key: "customer_email",     label: "Customer Email",   type: "text",   group: "Customer" },
+  // Line item fields
+  { key: "li_sku",             label: "Line Item SKU",    type: "text",   group: "Line Items" },
+  { key: "li_product",         label: "Product Title",    type: "text",   group: "Line Items" },
+  { key: "li_variant",         label: "Variant",          type: "text",   group: "Line Items" },
+  { key: "li_qty",             label: "Quantity",         type: "number", group: "Line Items" },
+  { key: "li_price",           label: "Line Item Price",  type: "number", group: "Line Items" },
+  { key: "li_fulfillment",     label: "LI Fulfillment",   type: "select", group: "Line Items", options: ["unfulfilled","partial","fulfilled"] },
+] as const;
+
+type FilterFieldKey = typeof FILTER_FIELDS[number]["key"];
+
+const OPS_FOR_TYPE: Record<string, FilterOp[]> = {
+  text:   ["contains", "not_contains", "=", "!=", "is_empty", "is_not_empty"],
+  select: ["=", "!=", "is_empty", "is_not_empty"],
+  number: ["=", "!=", ">", "<", ">=", "<=", "is_empty", "is_not_empty"],
+  date:   [">", "<", ">=", "<=", "is_empty", "is_not_empty"],
+};
+
+const OP_LABEL: Record<FilterOp, string> = {
+  "=": "is",
+  "!=": "is not",
+  "contains": "contains",
+  "not_contains": "does not contain",
+  ">": "greater than",
+  "<": "less than",
+  ">=": "≥",
+  "<=": "≤",
+  "is_empty": "is empty",
+  "is_not_empty": "is not empty",
+};
+
+function getOrderVal(order: Order, field: string): string | number | null {
+  switch (field) {
+    case "order_number":       return order.order_number;
+    case "status":             return order.status;
+    case "fulfillment_status": return order.fulfillment_status;
+    case "financial_status":   return order.financial_status;
+    case "total_price":        return order.total_price;
+    case "item_count":         return order.item_count;
+    case "email":              return order.email;
+    case "tags":               return (order.tags ?? []).join(",");
+    case "payment_gateway":    return order.payment_gateway;
+    case "source_name":        return order.source_name;
+    case "note":               return order.note;
+    case "created_at":         return order.created_at;
+    case "processed_at":       return order.processed_at;
+    case "customer_name":
+      return order.customer
+        ? `${order.customer.first_name ?? ""} ${order.customer.last_name ?? ""}`.trim()
+        : null;
+    case "customer_email":     return order.customer?.email ?? null;
+    default:                   return null;
+  }
+}
+
+function matchesFilter(order: Order, row: FilterRow): boolean {
+  const fd = FILTER_FIELDS.find(f => f.key === row.field);
+  if (!fd) return true;
+
+  const isLineItemField = fd.group === "Line Items";
+
+  if (isLineItemField) {
+    // For line item fields: the order matches if ANY line item satisfies the condition
+    return order.line_items.some(li => {
+      const val = getLiVal(li, row.field);
+      return evalOp(val, row.op, row.value, fd.type as string);
+    });
+  }
+
+  const val = getOrderVal(order, row.field);
+  return evalOp(val, row.op, row.value, fd.type as string);
+}
+
+function getLiVal(li: LineItem, field: string): string | number | null {
+  switch (field) {
+    case "li_sku":        return li.sku;
+    case "li_product":    return li.product_title ?? li.name;
+    case "li_variant":    return li.variant_title;
+    case "li_qty":        return li.quantity;
+    case "li_price":      return li.price;
+    case "li_fulfillment":return li.fulfillment_status;
+    default:              return null;
+  }
+}
+
+function evalOp(val: string | number | null, op: FilterOp, target: string, type: string): boolean {
+  if (op === "is_empty")     return val == null || String(val).trim() === "";
+  if (op === "is_not_empty") return val != null && String(val).trim() !== "";
+  if (val == null)           return false;
+
+  if (type === "number") {
+    const n = Number(val);
+    const t = Number(target);
+    if (isNaN(n) || isNaN(t)) return false;
+    switch (op) {
+      case "=":  return n === t;
+      case "!=": return n !== t;
+      case ">":  return n > t;
+      case "<":  return n < t;
+      case ">=": return n >= t;
+      case "<=": return n <= t;
+    }
+  }
+
+  if (type === "date") {
+    const d  = new Date(String(val)).getTime();
+    const dt = new Date(target).getTime();
+    if (isNaN(d) || isNaN(dt)) return false;
+    switch (op) {
+      case ">":  return d > dt;
+      case "<":  return d < dt;
+      case ">=": return d >= dt;
+      case "<=": return d <= dt;
+      case "=":  return d === dt;
+      case "!=": return d !== dt;
+    }
+  }
+
+  const sv = String(val).toLowerCase();
+  const tv = target.toLowerCase();
+  switch (op) {
+    case "=":            return sv === tv;
+    case "!=":           return sv !== tv;
+    case "contains":     return sv.includes(tv);
+    case "not_contains": return !sv.includes(tv);
+    default:             return true;
+  }
+}
 
 // ── Types ────────────────────────────────────────────────────────
 interface Customer { id: string; first_name: string | null; last_name: string | null; email: string | null; }
@@ -222,50 +381,103 @@ function SkeletonRow({ cols }: { cols: number }) {
 
 // ── Line items drawer ────────────────────────────────────────────
 function LineItemsPanel({ items, currency }: { items: LineItem[]; currency: string | null }) {
-  if (!items.length) return <div className="px-6 py-4 text-sm text-gray-400 italic">No line items</div>;
+  const [liSearch, setLiSearch] = useState("");
+  if (!items.length) return <div className="px-6 py-3 text-xs text-gray-400 italic">No line items</div>;
+
+  const totalQty   = items.reduce((s, li) => s + li.quantity, 0);
+  const totalValue = items.reduce((s, li) => s + (li.price ?? 0) * li.quantity, 0);
+  const cur = currency ?? "USD";
+
+  const filtered = liSearch
+    ? items.filter(li =>
+        [li.sku, li.product_title, li.name, li.variant_title]
+          .some(v => v?.toLowerCase().includes(liSearch.toLowerCase()))
+      )
+    : items;
+
   return (
-    <div className="px-2 pb-2 pt-1">
-      <div className="rounded-lg border border-blue-100 overflow-hidden">
+    <div className="px-3 pb-3 pt-2">
+      {/* Summary bar */}
+      <div className="flex items-center gap-4 mb-2 px-1">
+        <span className="text-[11px] text-gray-500">
+          <span className="font-semibold text-gray-700">{items.length}</span> line item{items.length !== 1 ? "s" : ""}
+        </span>
+        <span className="text-[11px] text-gray-500">
+          <span className="font-semibold text-gray-700">{totalQty}</span> units
+        </span>
+        <span className="text-[11px] text-gray-500">
+          Total: <span className="font-semibold text-gray-700">{fmt(totalValue, cur)}</span>
+        </span>
+        {/* Search inside line items */}
+        <div className="ml-auto relative">
+          <svg className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+          </svg>
+          <input
+            type="text" value={liSearch}
+            onChange={e => setLiSearch(e.target.value)}
+            placeholder="Filter line items…"
+            className="pl-6 pr-3 py-1 text-[11px] border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-400 w-44 bg-white"
+          />
+        </div>
+      </div>
+
+      <div className="rounded-md border border-gray-100 overflow-hidden">
         <table className="w-full text-xs">
           <thead>
-            <tr className="bg-gradient-to-r from-blue-50 to-indigo-50">
-              <th className="text-left px-4 py-2.5 font-semibold text-blue-700 uppercase tracking-wider text-[10px]">SKU</th>
-              <th className="text-left px-4 py-2.5 font-semibold text-blue-700 uppercase tracking-wider text-[10px]">Item</th>
-              <th className="text-left px-4 py-2.5 font-semibold text-blue-700 uppercase tracking-wider text-[10px]">Variant</th>
-              <th className="text-left px-4 py-2.5 font-semibold text-blue-700 uppercase tracking-wider text-[10px]">Qty</th>
-              <th className="text-left px-4 py-2.5 font-semibold text-blue-700 uppercase tracking-wider text-[10px]">Unit Price</th>
-              <th className="text-left px-4 py-2.5 font-semibold text-blue-700 uppercase tracking-wider text-[10px]">Line Total</th>
-              <th className="text-left px-4 py-2.5 font-semibold text-blue-700 uppercase tracking-wider text-[10px]">Fulfillment</th>
-              <th className="text-left px-4 py-2.5 font-semibold text-blue-700 uppercase tracking-wider text-[10px]">Flags</th>
+            <tr className="border-b border-gray-100 bg-gray-50">
+              <th className="text-left px-3 py-2 font-medium text-gray-400 uppercase tracking-wider text-[9px]">SKU</th>
+              <th className="text-left px-3 py-2 font-medium text-gray-400 uppercase tracking-wider text-[9px]">Product</th>
+              <th className="text-left px-3 py-2 font-medium text-gray-400 uppercase tracking-wider text-[9px]">Variant</th>
+              <th className="text-right px-3 py-2 font-medium text-gray-400 uppercase tracking-wider text-[9px]">Qty</th>
+              <th className="text-right px-3 py-2 font-medium text-gray-400 uppercase tracking-wider text-[9px]">Unit</th>
+              <th className="text-right px-3 py-2 font-medium text-gray-400 uppercase tracking-wider text-[9px]">Total</th>
+              <th className="text-left px-3 py-2 font-medium text-gray-400 uppercase tracking-wider text-[9px]">Fulfillment</th>
+              <th className="text-left px-3 py-2 font-medium text-gray-400 uppercase tracking-wider text-[9px]">Notes</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-blue-50 bg-white">
-            {items.map((li, idx) => (
-              <tr key={li.id} className={`hover:bg-blue-50/40 transition-colors ${idx % 2 === 1 ? "bg-slate-50/50" : ""}`}>
-                <td className="px-4 py-2.5 font-mono text-gray-600 text-[11px] whitespace-nowrap">{li.sku ?? <span className="text-gray-300">—</span>}</td>
-                <td className="px-4 py-2.5 text-gray-800 font-medium max-w-[200px]">
-                  <span className="truncate block" title={li.product_title ?? li.name ?? ""}>{li.product_title ?? li.name ?? "—"}</span>
+          <tbody className="divide-y divide-gray-50 bg-white">
+            {filtered.map(li => (
+              <tr key={li.id} className="hover:bg-blue-50/30 transition-colors">
+                <td className="px-3 py-2 font-mono text-gray-500 text-[10px] whitespace-nowrap">
+                  {li.sku ?? <span className="text-gray-200">—</span>}
                 </td>
-                <td className="px-4 py-2.5 text-gray-500">{li.variant_title && li.variant_title !== "Default Title" ? li.variant_title : <span className="text-gray-300">—</span>}</td>
-                <td className="px-4 py-2.5 font-semibold text-gray-800 tabular-nums">{li.quantity}</td>
-                <td className="px-4 py-2.5 text-gray-600 tabular-nums">{fmt(li.price, currency ?? "USD")}</td>
-                <td className="px-4 py-2.5 text-gray-800 font-medium tabular-nums">{li.price != null ? fmt(li.price * li.quantity, currency ?? "USD") : "—"}</td>
-                <td className="px-4 py-2.5">
+                <td className="px-3 py-2 text-gray-800 font-medium max-w-[200px]">
+                  <span className="truncate block text-[11px]" title={li.product_title ?? li.name ?? ""}>
+                    {li.product_title ?? li.name ?? "—"}
+                  </span>
+                </td>
+                <td className="px-3 py-2 text-gray-400 text-[10px]">
+                  {li.variant_title && li.variant_title !== "Default Title" ? li.variant_title : <span className="text-gray-200">—</span>}
+                </td>
+                <td className="px-3 py-2 text-right font-semibold text-gray-700 tabular-nums">{li.quantity}</td>
+                <td className="px-3 py-2 text-right text-gray-500 tabular-nums">{fmt(li.price, cur)}</td>
+                <td className="px-3 py-2 text-right font-medium text-gray-800 tabular-nums">
+                  {li.price != null ? fmt(li.price * li.quantity, cur) : "—"}
+                </td>
+                <td className="px-3 py-2">
                   {li.fulfillment_status
                     ? <Badge value={li.fulfillment_status} colors={FULFIL_COLORS} />
-                    : <span className="text-gray-300 text-xs">—</span>}
+                    : <span className="text-gray-200 text-[10px]">—</span>}
                 </td>
-                <td className="px-4 py-2.5">
+                <td className="px-3 py-2">
                   <div className="flex gap-1 flex-wrap">
-                    {li.gift_card && <span className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded-full text-[10px] font-medium">Gift</span>}
-                    {!li.requires_shipping && <span className="px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded-full text-[10px]">No Ship</span>}
-                    {li.properties?.map(p => (
-                      <span key={p.name} className="px-1.5 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 rounded text-[10px]" title={`${p.name}: ${p.value}`}>{p.name}: {p.value}</span>
+                    {li.gift_card && <span className="px-1.5 py-0.5 bg-purple-50 text-purple-600 rounded-full text-[9px] font-medium border border-purple-100">Gift card</span>}
+                    {!li.requires_shipping && <span className="px-1.5 py-0.5 bg-gray-100 text-gray-400 rounded-full text-[9px] border border-gray-200">No shipping</span>}
+                    {li.properties?.map((p: { name: string; value: string }) => (
+                      <span key={p.name} className="px-1.5 py-0.5 bg-amber-50 text-amber-600 border border-amber-100 rounded text-[9px]" title={`${p.name}: ${p.value}`}>
+                        {p.name}: {p.value}
+                      </span>
                     ))}
                   </div>
                 </td>
               </tr>
             ))}
+            {filtered.length === 0 && (
+              <tr>
+                <td colSpan={8} className="px-3 py-3 text-center text-xs text-gray-400">No items match your filter</td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -441,10 +653,158 @@ function FilterChip({ label, onRemove }: { label: string; onRemove: () => void }
 
 // ── Density control ──────────────────────────────────────────────
 const DENSITY_CONFIG: Record<Density, { label: string; rowPy: string; headerPy: string }> = {
-  compact:     { label: "Compact",     rowPy: "py-1.5", headerPy: "py-2" },
-  default:     { label: "Default",     rowPy: "py-3",   headerPy: "py-3" },
+  compact:     { label: "Compact",     rowPy: "py-1",   headerPy: "py-1.5" },
+  default:     { label: "Default",     rowPy: "py-2.5", headerPy: "py-2.5" },
   comfortable: { label: "Comfortable", rowPy: "py-4",   headerPy: "py-4" },
 };
+
+// ── Advanced Filter Builder ───────────────────────────────────
+function newFilterRow(): FilterRow {
+  return { id: Math.random().toString(36).slice(2), field: "status", op: "=", value: "" };
+}
+
+function AdvancedFilterBuilder({
+  filters,
+  onChange,
+  onClose,
+}: {
+  filters: FilterRow[];
+  onChange: (rows: FilterRow[]) => void;
+  onClose: () => void;
+}) {
+  const [rows, setRows] = useState<FilterRow[]>(filters.length ? filters : [newFilterRow()]);
+
+  const update = (id: string, patch: Partial<FilterRow>) => {
+    setRows(prev => prev.map(r => r.id === id ? { ...r, ...patch } : r));
+  };
+
+  const addRow = () => setRows(prev => [...prev, newFilterRow()]);
+  const removeRow = (id: string) => setRows(prev => prev.filter(r => r.id !== id));
+
+  const apply = () => { onChange(rows.filter(r => r.field)); onClose(); };
+  const clear  = () => { setRows([newFilterRow()]); onChange([]); onClose(); };
+
+  const groups = Array.from(new Set(FILTER_FIELDS.map(f => f.group)));
+
+  return (
+    <div className="absolute left-0 top-11 z-50 bg-white border border-gray-200 rounded-xl shadow-2xl w-[580px] overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+        <div className="flex items-center gap-2">
+          <svg className="w-4 h-4 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+          </svg>
+          <span className="text-sm font-semibold text-gray-900">Filter Builder</span>
+          <span className="text-xs text-gray-400 ml-1">{rows.length} rule{rows.length !== 1 ? "s" : ""} · matches orders where ALL conditions are true</span>
+        </div>
+        <button onClick={onClose} className="p-1 hover:bg-gray-100 rounded-md text-gray-400 hover:text-gray-600">
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+
+      {/* Rules */}
+      <div className="max-h-80 overflow-y-auto px-4 py-3 flex flex-col gap-2">
+        {rows.map((row, idx) => {
+          const fd = FILTER_FIELDS.find(f => f.key === row.field);
+          const ops = OPS_FOR_TYPE[fd?.type ?? "text"];
+          const needsValue = row.op !== "is_empty" && row.op !== "is_not_empty";
+          return (
+            <div key={row.id} className="flex items-center gap-2 group">
+              <span className="text-[10px] text-gray-400 w-6 text-right shrink-0 font-mono">
+                {idx === 0 ? "IF" : "AND"}
+              </span>
+
+              {/* Field picker */}
+              <select
+                value={row.field}
+                onChange={e => {
+                  const newFd = FILTER_FIELDS.find(f => f.key === e.target.value);
+                  const newOps = OPS_FOR_TYPE[newFd?.type ?? "text"];
+                  update(row.id, { field: e.target.value, op: newOps[0], value: "" });
+                }}
+                className="flex-1 min-w-0 text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white text-gray-700"
+              >
+                {groups.map(g => (
+                  <optgroup key={g} label={g}>
+                    {FILTER_FIELDS.filter(f => f.group === g).map(f => (
+                      <option key={f.key} value={f.key}>{f.label}</option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+
+              {/* Operator picker */}
+              <select
+                value={row.op}
+                onChange={e => update(row.id, { op: e.target.value as FilterOp })}
+                className="w-36 shrink-0 text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white text-gray-700"
+              >
+                {ops.map(op => (
+                  <option key={op} value={op}>{OP_LABEL[op]}</option>
+                ))}
+              </select>
+
+              {/* Value input */}
+              {needsValue && (
+                (fd as any)?.options ? (
+                  <select
+                    value={row.value}
+                    onChange={e => update(row.id, { value: e.target.value })}
+                    className="flex-1 min-w-0 text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white text-gray-700"
+                  >
+                    <option value="">-- pick --</option>
+                    {(fd as any).options.map((o: string) => (
+                      <option key={o} value={o}>{o.replace(/_/g, " ")}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type={fd?.type === "number" ? "number" : fd?.type === "date" ? "date" : "text"}
+                    value={row.value}
+                    onChange={e => update(row.id, { value: e.target.value })}
+                    placeholder="value…"
+                    className="flex-1 min-w-0 text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white text-gray-700"
+                  />
+                )
+              )}
+              {!needsValue && <div className="flex-1" />}
+
+              {/* Remove button */}
+              <button
+                onClick={() => removeRow(row.id)}
+                className="p-1 text-gray-300 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+                title="Remove rule"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Footer */}
+      <div className="flex items-center justify-between px-4 py-3 border-t border-gray-100 bg-gray-50">
+        <button
+          onClick={addRow}
+          className="flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-800 font-medium"
+        >
+          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
+          </svg>
+          Add rule
+        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={clear} className="text-xs text-gray-500 hover:text-red-500 px-3 py-1.5 border border-gray-200 rounded-lg hover:border-red-200 transition-colors">Clear all</button>
+          <button onClick={apply} className="text-xs bg-blue-600 hover:bg-blue-700 text-white px-4 py-1.5 rounded-lg font-medium transition-colors">Apply filters</button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ── Main page ────────────────────────────────────────────────────
 export default function OrdersPage() {
@@ -456,6 +816,7 @@ export default function OrdersPage() {
   const [statusFilter, setStatusFilter] = useState("");
   const [fulfillmentFilter, setFulfillmentFilter] = useState("");
   const [financialFilter, setFinancialFilter] = useState("");
+  const [filterRows, setFilterRows] = useState<FilterRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [showColChooser, setShowColChooser] = useState(false);
@@ -464,7 +825,7 @@ export default function OrdersPage() {
   const [computedDefs, setComputedDefs] = useState<ComputedFieldDef[]>([]);
   const [sortKey, setSortKey] = useState<string | null>("created_at");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
-  const [density, setDensity] = useState<Density>("default");
+  const [density, setDensity] = useState<Density>("compact");
   const [showDensity, setShowDensity] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -546,8 +907,15 @@ export default function OrdersPage() {
     .filter(c => visibleCols.includes(c.key))
     .sort((a, b) => visibleCols.indexOf(a.key) - visibleCols.indexOf(b.key));
 
+  // Client-side filter: apply builder rules on top of API results
+  const filteredItems = useMemo(() => {
+    if (!data?.items) return [];
+    if (!filterRows.length) return data.items;
+    return data.items.filter(order => filterRows.every(row => matchesFilter(order, row)));
+  }, [data?.items, filterRows]);
+
   // Client-side sort (backend doesn't support sort yet, so we sort locally)
-  const sortedItems = data?.items ? [...data.items].sort((a, b) => {
+  const sortedItems = filteredItems.length ? [...filteredItems].sort((a, b) => {
     if (!sortKey || !sortDir) return 0;
     let av: string | number | null = null;
     let bv: string | number | null = null;
@@ -566,7 +934,7 @@ export default function OrdersPage() {
     return sortDir === "asc" ? cmp : -cmp;
   }) : [];
 
-  const activeFilterCount = [statusFilter, fulfillmentFilter, financialFilter].filter(Boolean).length;
+  const activeFilterCount = [statusFilter, fulfillmentFilter, financialFilter].filter(Boolean).length + filterRows.length;
 
   return (
     <AppLayout>
@@ -640,27 +1008,28 @@ export default function OrdersPage() {
             )}
           </div>
 
-          {/* Filter button */}
-          <button
-            onClick={() => setShowFilters(v => !v)}
-            className={`flex items-center gap-2 px-3 py-2 text-sm border rounded-lg transition-colors ${showFilters || activeFilterCount > 0 ? "border-blue-300 bg-blue-50 text-blue-700" : "border-gray-200 hover:bg-gray-50 text-gray-700"}`}
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
-            </svg>
-            Filters
-            {activeFilterCount > 0 && (
-              <span className="ml-0.5 w-4 h-4 bg-blue-600 text-white rounded-full text-[10px] font-bold flex items-center justify-center">{activeFilterCount}</span>
+          {/* Filter builder button */}
+          <div className="relative">
+            <button
+              onClick={() => setShowFilters(v => !v)}
+              className={`flex items-center gap-2 px-3 py-2 text-sm border rounded-lg transition-colors ${showFilters || filterRows.length > 0 ? "border-blue-300 bg-blue-50 text-blue-700" : "border-gray-200 hover:bg-gray-50 text-gray-600"}`}
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+              </svg>
+              Filter
+              {filterRows.length > 0 && (
+                <span className="ml-0.5 w-4 h-4 bg-blue-600 text-white rounded-full text-[10px] font-bold flex items-center justify-center">{filterRows.length}</span>
+              )}
+            </button>
+            {showFilters && (
+              <AdvancedFilterBuilder
+                filters={filterRows}
+                onChange={rows => { setFilterRows(rows); }}
+                onClose={() => setShowFilters(false)}
+              />
             )}
-          </button>
-
-          {/* Active filter chips */}
-          {statusFilter && <FilterChip label={`Status: ${statusFilter.replace(/_/g, " ")}`} onRemove={() => { setStatusFilter(""); setPage(1); }} />}
-          {fulfillmentFilter && <FilterChip label={`Fulfillment: ${fulfillmentFilter.replace(/_/g, " ")}`} onRemove={() => { setFulfillmentFilter(""); setPage(1); }} />}
-          {financialFilter && <FilterChip label={`Payment: ${financialFilter.replace(/_/g, " ")}`} onRemove={() => { setFinancialFilter(""); setPage(1); }} />}
-          {activeFilterCount > 1 && (
-            <button onClick={() => { setStatusFilter(""); setFulfillmentFilter(""); setFinancialFilter(""); setPage(1); }} className="text-xs text-red-500 hover:text-red-700 hover:underline">Clear all</button>
-          )}
+          </div>
 
           {/* Right side controls */}
           <div className="ml-auto flex items-center gap-2">
@@ -700,62 +1069,53 @@ export default function OrdersPage() {
           </div>
         </div>
 
-        {/* ── Filter panel ── */}
-        {showFilters && (
-          <div className="flex gap-3 flex-wrap items-end pb-3 px-4 py-3 bg-gray-50 rounded-xl border border-gray-200 mb-1">
-            <div>
-              <label className="block text-[10px] font-semibold uppercase tracking-wider text-gray-500 mb-1">Order Status</label>
-              <select value={statusFilter} onChange={e => { setStatusFilter(e.target.value); setPage(1); }}
-                className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                <option value="">All</option>
-                <option value="open">Open</option>
-                <option value="fulfilled">Fulfilled</option>
-                <option value="on_hold">On Hold</option>
-                <option value="cancelled">Cancelled</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-[10px] font-semibold uppercase tracking-wider text-gray-500 mb-1">Fulfillment</label>
-              <select value={fulfillmentFilter} onChange={e => { setFulfillmentFilter(e.target.value); setPage(1); }}
-                className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                <option value="">All</option>
-                <option value="unfulfilled">Unfulfilled</option>
-                <option value="partial">Partial</option>
-                <option value="fulfilled">Fulfilled</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-[10px] font-semibold uppercase tracking-wider text-gray-500 mb-1">Payment</label>
-              <select value={financialFilter} onChange={e => { setFinancialFilter(e.target.value); setPage(1); }}
-                className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                <option value="">All</option>
-                <option value="paid">Paid</option>
-                <option value="pending">Pending</option>
-                <option value="refunded">Refunded</option>
-                <option value="voided">Voided</option>
-              </select>
-            </div>
-            <button onClick={() => { setStatusFilter(""); setFulfillmentFilter(""); setFinancialFilter(""); setPage(1); }}
-              className="px-3 py-1.5 text-xs text-gray-500 hover:text-red-500 border border-gray-200 rounded-lg hover:border-red-200 transition-colors">
-              Clear filters
+        {/* ── Filter builder panel ── */}
+        {filterRows.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 pb-2">
+            {filterRows.map(row => {
+              const fd = FILTER_FIELDS.find(f => f.key === row.field);
+              const needsValue = row.op !== "is_empty" && row.op !== "is_not_empty";
+              const label = `${fd?.label ?? row.field} ${OP_LABEL[row.op]}${needsValue && row.value ? ` "${row.value}"` : ""}`;
+              return (
+                <FilterChip
+                  key={row.id}
+                  label={label}
+                  onRemove={() => setFilterRows(prev => prev.filter(r => r.id !== row.id))}
+                />
+              );
+            })}
+            <button
+              onClick={() => setFilterRows([])}
+              className="text-xs text-red-400 hover:text-red-600 px-2 py-1 hover:underline"
+            >
+              Clear all
             </button>
           </div>
         )}
 
         {/* ── Table ── */}
-        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden flex-1">
+        {/* Airtable/Notion style: no outer card border, hairline row separators only, very light header */}
+        <div className="bg-white rounded-lg overflow-hidden flex-1 ring-1 ring-gray-100">
+          {filterRows.length > 0 && (
+            <div className="px-4 py-1.5 bg-amber-50 border-b border-amber-100 text-xs text-amber-700 flex items-center gap-1.5">
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              Showing {sortedItems.length} of {data?.total ?? "…"} orders (builder filters active — filtered client-side on this page)
+            </div>
+          )}
           <div className="overflow-x-auto">
             <table className="w-full text-sm border-collapse">
               <thead>
-                <tr className="border-b border-gray-200 bg-gray-50">
-                  <th className="w-10 px-3" />
+                <tr className="border-b border-gray-100">
+                  <th className="w-8 px-2" />
                   {colDefs.map(col => (
                     <th key={col.key}
-                      className={`text-left px-4 ${dc.headerPy} text-[11px] font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap select-none
-                        ${col.sortable ? "cursor-pointer hover:text-gray-800 hover:bg-gray-100 group transition-colors" : ""}`}
+                      className={`text-left px-3 ${dc.headerPy} text-[10px] font-medium text-gray-400 uppercase tracking-wider whitespace-nowrap select-none
+                        ${col.sortable ? "cursor-pointer hover:text-gray-600 group transition-colors" : ""}`}
                       onClick={() => col.sortable && handleSort(col.key)}
                     >
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-1">
                         {col.computed && <span className="text-violet-400">⚡</span>}
                         {col.label.replace(/^⚡ /, "")}
                         {col.sortable && <SortIcon dir={sortKey === col.key ? sortDir : null} />}
@@ -766,15 +1126,15 @@ export default function OrdersPage() {
               </thead>
               <tbody>
                 {loading ? (
-                  Array.from({ length: 8 }).map((_, i) => <SkeletonRow key={i} cols={colDefs.length} />)
+                  Array.from({ length: 10 }).map((_, i) => <SkeletonRow key={i} cols={colDefs.length} />)
                 ) : !sortedItems.length ? (
                   <tr>
                     <td colSpan={colDefs.length + 1}>
                       <div className="flex flex-col items-center justify-center py-20 text-center">
-                        <svg className="w-12 h-12 text-gray-200 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <svg className="w-10 h-10 text-gray-200 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
                         </svg>
-                        <p className="text-gray-500 font-medium">No orders found</p>
+                        <p className="text-gray-500 text-sm font-medium">No orders found</p>
                         <p className="text-gray-400 text-xs mt-1">Try adjusting your search or filters</p>
                       </div>
                     </td>
@@ -784,27 +1144,27 @@ export default function OrdersPage() {
                     <tr
                       key={order.id}
                       onClick={() => toggleExpand(order.id)}
-                      className={`border-b border-gray-100 cursor-pointer transition-colors group
+                      className={`border-b border-gray-50 cursor-pointer transition-colors group
                         ${expanded.has(order.id)
-                          ? "bg-blue-50/60"
-                          : rowIdx % 2 === 0 ? "bg-white hover:bg-gray-50/80" : "bg-gray-50/40 hover:bg-gray-100/60"}`}
+                          ? "bg-blue-50/50"
+                          : "hover:bg-gray-50/70"}`}
                     >
-                      <td className={`px-3 ${dc.rowPy} text-center w-10`}>
-                        <div className={`inline-flex items-center justify-center w-5 h-5 rounded transition-transform ${expanded.has(order.id) ? "rotate-90 text-blue-500" : "text-gray-300 group-hover:text-gray-500"}`}>
-                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <td className={`px-2 ${dc.rowPy} text-center w-8`}>
+                        <div className={`inline-flex items-center justify-center transition-transform ${expanded.has(order.id) ? "rotate-90 text-blue-400" : "text-gray-200 group-hover:text-gray-400"}`}>
+                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" />
                           </svg>
                         </div>
                       </td>
                       {colDefs.map(col => (
-                        <td key={col.key} className={`px-4 ${dc.rowPy} max-w-[220px]`}>
+                        <td key={col.key} className={`px-3 ${dc.rowPy} max-w-[200px]`}>
                           <Cell col={col.key} order={order} computedDefs={computedDefs} />
                         </td>
                       ))}
                     </tr>
                     {expanded.has(order.id) && (
-                      <tr key={`${order.id}-items`} className="bg-blue-50/30 border-b border-blue-100">
-                        <td colSpan={colDefs.length + 1} className="border-l-4 border-blue-400">
+                      <tr key={`${order.id}-items`} className="bg-slate-50 border-b border-gray-100">
+                        <td colSpan={colDefs.length + 1} className="border-l-2 border-blue-300">
                           <LineItemsPanel items={order.line_items} currency={order.currency} />
                         </td>
                       </tr>
