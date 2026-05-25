@@ -186,12 +186,19 @@ async def seed():
         print(f"Products seeded: {len(products)}")
 
         # --- Update ALL existing variants with metafields/dimensions if missing ---
-        from sqlalchemy import update
         all_variants_result = await db.execute(select(Variant))
         all_variants = all_variants_result.scalars().all()
         updated_count = 0
         for variant in all_variants:
-            if not variant.metafields or not variant.length:
+            # Check if metafields is None, empty, or missing custom.bin_number
+            needs_update = (
+                variant.metafields is None or 
+                not isinstance(variant.metafields, dict) or
+                not variant.metafields.get("custom", {}).get("bin_number") or
+                variant.length is None or
+                variant.shipping_unit is None
+            )
+            if needs_update:
                 profile = get_dimension_profile()
                 bin_number = generate_bin_number()
                 variant.grams = profile["grams"]
@@ -213,6 +220,7 @@ async def seed():
         if updated_count > 0:
             await db.flush()
             print(f"Updated {updated_count} variants with metafields/dimensions")
+        print(f"Total variants in database: {len(all_variants)}")
 
         # --- Customers + Orders ---
         order_count = 0
