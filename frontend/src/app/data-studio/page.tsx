@@ -1334,10 +1334,27 @@ export default function DataStudioPage() {
     if (!v2Mode || !formState.source_entity || !schema) return;
     const entitySchema = schema.entities[formState.source_entity];
     if (entitySchema) {
-      const fields = [...entitySchema.native_fields];
+      // Collect ALL fields: native + custom + metafields + computed
+      const fields: string[] = [...entitySchema.native_fields];
+
+      // Add custom fields (these are your "bin" fields!)
+      if (entitySchema.custom_fields) {
+        fields.push(...entitySchema.custom_fields.map(f => f.key));
+      }
+
+      // Add metafields (e.g., custom.bin)
+      if (entitySchema.metafields) {
+        fields.push(...entitySchema.metafields.map(f => f.key));
+      }
+
+      // Add computed fields from other rules
       if (entitySchema.computed_fields) {
         fields.push(...entitySchema.computed_fields.map(f => f.key));
       }
+
+      // Sort alphabetically for easier browsing
+      fields.sort((a, b) => a.localeCompare(b));
+
       setAvailableFields(fields);
     }
   }, [v2Mode, formState.source_entity, schema]);
