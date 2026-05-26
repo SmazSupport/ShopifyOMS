@@ -14,7 +14,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 revision: str = "dynamic_fields_v1"
-down_revision: Union[str, None] = "data_studio_v2"
+down_revision: Union[str, None] = "d0f61aa21bd4"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
