@@ -658,7 +658,15 @@ async def get_schema(
             # Ignore errors from data discovery
             pass
 
-    return SchemaResponse(entities=schema)
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        content={"entities": schema},
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "*"
+        }
+    )
 
 
 # ═════════════════════════════════════════════════════════════════
