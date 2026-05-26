@@ -171,6 +171,13 @@ interface LineItem {
   id: string; sku: string | null; product_title: string | null; variant_title: string | null;
   name: string | null; quantity: number; price: number | null; fulfillment_status: string | null;
   requires_shipping: boolean; gift_card: boolean; properties: { name: string; value: string }[] | null;
+  grams: number | null; vendor: string | null; product_type: string | null;
+  total_discount: number | null; extra_attributes: Record<string, unknown> | null;
+  computed_fields: Record<string, string | null> | null;
+  custom_fields: Record<string, unknown> | null;
+}
+interface RegistryField {
+  key: string; name: string; field_type: string; source: string; description: string | null;
 }
 interface Order {
   id: string; order_number: string | null; status: string;
@@ -221,6 +228,7 @@ const STATIC_COLUMNS = [
 const DEFAULT_COLS = ["order_number", "customer", "status", "fulfillment_status", "financial_status", "total_price", "item_count", "created_at"];
 const LS_KEY = "oms_orders_columns_v2";
 const LS_DENSITY = "oms_orders_density";
+const LS_LI_COLS = "oms_li_columns_v1";
 
 // ── Badge helpers ────────────────────────────────────────────────
 const STATUS_COLORS: Record<string, string> = {
@@ -380,8 +388,77 @@ function SkeletonRow({ cols }: { cols: number }) {
 }
 
 // ── Line items drawer ────────────────────────────────────────────
-function LineItemsPanel({ items, currency }: { items: LineItem[]; currency: string | null }) {
+// ── Dynamic line item cell renderer ─────────────────────────────
+function LiCell({ field, li, currency }: { field: RegistryField; li: LineItem; currency: string }) {
+  const dash = <span className="text-gray-200">—</span>;
+
+  // Computed fields (from Data Studio transforms)
+  if (field.source === "computed") {
+    const key = field.key.replace(/^cf_/, "");
+    const v = li.computed_fields?.[key] ?? li.computed_fields?.[field.key];
+    if (!v) return dash;
+    return <span className="px-1.5 py-0.5 bg-violet-50 text-violet-700 rounded text-[10px] font-medium ring-1 ring-violet-100">{String(v)}</span>;
+  }
+
+  // Custom fields (from CustomFieldValues)
+  if (field.source === "shopify_metafield") {
+    const v = li.custom_fields?.[field.key];
+    if (v == null) return dash;
+    return <span className="text-gray-600 text-[10px]">{String(v)}</span>;
+  }
+
+  // Native fields
+  const cur = currency ?? "USD";
+  switch (field.key) {
+    case "sku":              return <span className="font-mono text-gray-500 text-[10px]">{li.sku ?? dash}</span>;
+    case "product_title":   return <span className="text-gray-800 font-medium text-[11px] truncate block max-w-[200px]" title={li.product_title ?? ""}>{li.product_title ?? li.name ?? "—"}</span>;
+    case "variant_title":   return li.variant_title && li.variant_title !== "Default Title" ? <span className="text-gray-400 text-[10px]">{li.variant_title}</span> : dash;
+    case "quantity":        return <span className="font-semibold text-gray-700 tabular-nums">{li.quantity}</span>;
+    case "price":           return <span className="text-gray-500 tabular-nums">{fmt(li.price, cur)}</span>;
+    case "total_discount":  return li.total_discount ? <span className="text-emerald-600 tabular-nums">-{fmt(li.total_discount, cur)}</span> : dash;
+    case "grams":           return li.grams ? <span className="text-gray-500 tabular-nums">{li.grams}g</span> : dash;
+    case "vendor":          return <span className="text-gray-500 text-[10px]">{li.vendor ?? dash}</span>;
+    case "product_type":    return <span className="text-gray-500 text-[10px]">{li.product_type ?? dash}</span>;
+    case "fulfillment_status": return li.fulfillment_status ? <Badge value={li.fulfillment_status} colors={FULFIL_COLORS} /> : dash;
+    case "requires_shipping":  return <span className={`text-[10px] ${li.requires_shipping ? "text-gray-400" : "text-amber-600"}`}>{li.requires_shipping ? "Yes" : "No"}</span>;
+    case "gift_card":       return <span className={`text-[10px] ${li.gift_card ? "text-purple-600" : "text-gray-300"}`}>{li.gift_card ? "Gift" : "—"}</span>;
+    case "properties":      return li.properties?.length ? (
+      <div className="flex gap-1 flex-wrap">
+        {li.properties.map((p: { name: string; value: string }) => (
+          <span key={p.name} className="px-1.5 py-0.5 bg-amber-50 text-amber-600 border border-amber-100 rounded text-[9px]">{p.name}: {p.value}</span>
+        ))}
+      </div>
+    ) : dash;
+    default: {
+      // Try extra_attributes
+      const v = (li.extra_attributes as Record<string, unknown> | null)?.[field.key];
+      if (v != null) return <span className="text-gray-500 text-[10px]">{String(v)}</span>;
+      return dash;
+    }
+  }
+}
+
+// ── Line items drawer ─────────────────────────────────────────────
+const DEFAULT_LI_COLS = ["sku", "product_title", "variant_title", "quantity", "price", "fulfillment_status", "properties"];
+
+function LineItemsPanel({
+  items, currency, liRegistry,
+}: {
+  items: LineItem[];
+  currency: string | null;
+  liRegistry: RegistryField[];
+}) {
   const [liSearch, setLiSearch] = useState("");
+  const [visibleLiCols, setVisibleLiCols] = useState<string[]>(() => {
+    try { const s = localStorage.getItem(LS_LI_COLS); return s ? JSON.parse(s) : DEFAULT_LI_COLS; } catch { return DEFAULT_LI_COLS; }
+  });
+  const [showLiColChooser, setShowLiColChooser] = useState(false);
+
+  const registry = liRegistry.length > 0 ? liRegistry : DEFAULT_LI_COLS.map(key => ({
+    key, name: key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()),
+    field_type: "text", source: "native", description: null,
+  }));
+
   if (!items.length) return <div className="px-6 py-3 text-xs text-gray-400 italic">No line items</div>;
 
   const totalQty   = items.reduce((s, li) => s + li.quantity, 0);
@@ -395,12 +472,25 @@ function LineItemsPanel({ items, currency }: { items: LineItem[]; currency: stri
       )
     : items;
 
+  const activeCols = registry.filter(f => visibleLiCols.includes(f.key));
+
+  const saveLiCols = (cols: string[]) => {
+    setVisibleLiCols(cols);
+    try { localStorage.setItem(LS_LI_COLS, JSON.stringify(cols)); } catch {}
+  };
+
+  const sourceTag = (source: string) => {
+    if (source === "computed") return <span className="text-[8px] bg-violet-50 text-violet-500 rounded px-1">⚡</span>;
+    if (source === "shopify_metafield") return <span className="text-[8px] bg-green-50 text-green-500 rounded px-1">SF</span>;
+    return null;
+  };
+
   return (
     <div className="px-3 pb-3 pt-2">
       {/* Summary bar */}
       <div className="flex items-center gap-4 mb-2 px-1">
         <span className="text-[11px] text-gray-500">
-          <span className="font-semibold text-gray-700">{items.length}</span> line item{items.length !== 1 ? "s" : ""}
+          <span className="font-semibold text-gray-700">{items.length}</span> item{items.length !== 1 ? "s" : ""}
         </span>
         <span className="text-[11px] text-gray-500">
           <span className="font-semibold text-gray-700">{totalQty}</span> units
@@ -408,78 +498,123 @@ function LineItemsPanel({ items, currency }: { items: LineItem[]; currency: stri
         <span className="text-[11px] text-gray-500">
           Total: <span className="font-semibold text-gray-700">{fmt(totalValue, cur)}</span>
         </span>
-        {/* Search inside line items */}
-        <div className="ml-auto relative">
-          <svg className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-          </svg>
-          <input
-            type="text" value={liSearch}
-            onChange={e => setLiSearch(e.target.value)}
-            placeholder="Filter line items…"
-            className="pl-6 pr-3 py-1 text-[11px] border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-400 w-44 bg-white"
-          />
+
+        <div className="ml-auto flex items-center gap-2">
+          {/* Search */}
+          <div className="relative">
+            <svg className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+            <input
+              type="text" value={liSearch}
+              onChange={e => setLiSearch(e.target.value)}
+              placeholder="Filter items…"
+              className="pl-6 pr-3 py-1 text-[11px] border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-400 w-36 bg-white"
+            />
+          </div>
+
+          {/* Column chooser */}
+          <div className="relative">
+            <button
+              onClick={() => setShowLiColChooser(v => !v)}
+              className={`flex items-center gap-1 px-2 py-1 text-[11px] border rounded-md transition-colors ${
+                showLiColChooser ? "border-blue-300 bg-blue-50 text-blue-600" : "border-gray-200 text-gray-500 hover:bg-gray-50"
+              }`}
+            >
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+              </svg>
+              Fields <span className="text-gray-400">{activeCols.length}</span>
+            </button>
+
+            {showLiColChooser && (
+              <div className="absolute right-0 top-7 z-50 bg-white border border-gray-200 rounded-xl shadow-2xl w-64 overflow-hidden">
+                <div className="px-3 py-2 border-b border-gray-100 flex items-center justify-between">
+                  <span className="text-xs font-semibold text-gray-700">Line Item Columns</span>
+                  <button onClick={() => setShowLiColChooser(false)} className="text-gray-400 hover:text-gray-600">
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+                <div className="px-2 py-1 border-b border-gray-100 flex gap-2">
+                  <button onClick={() => saveLiCols(DEFAULT_LI_COLS)} className="text-[10px] text-gray-500 hover:text-gray-700">Reset</button>
+                  <span className="text-gray-200">|</span>
+                  <button onClick={() => saveLiCols(registry.map(f => f.key))} className="text-[10px] text-blue-500 hover:text-blue-700">All</button>
+                </div>
+                <div className="max-h-60 overflow-y-auto">
+                  {["native", "computed", "shopify_metafield"].map(src => {
+                    const grp = registry.filter(f => f.source === src);
+                    if (!grp.length) return null;
+                    const label = src === "native" ? "Native" : src === "computed" ? "⚡ Computed" : "Shopify Fields";
+                    return (
+                      <div key={src}>
+                        <div className="px-3 py-1 text-[9px] font-bold uppercase tracking-widest text-gray-400 bg-gray-50">{label}</div>
+                        {grp.map(f => (
+                          <div
+                            key={f.key}
+                            onClick={() => saveLiCols(
+                              visibleLiCols.includes(f.key)
+                                ? visibleLiCols.filter(k => k !== f.key)
+                                : [...visibleLiCols, f.key]
+                            )}
+                            className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-gray-50 select-none"
+                          >
+                            <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center flex-shrink-0 ${
+                              visibleLiCols.includes(f.key) ? "bg-blue-600 border-blue-600" : "border-gray-300"
+                            }`}>
+                              {visibleLiCols.includes(f.key) && (
+                                <svg className="w-2 h-2 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                                </svg>
+                              )}
+                            </div>
+                            <span className="text-xs text-gray-700 flex-1">{f.name}</span>
+                            {sourceTag(f.source)}
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
       <div className="rounded-md border border-gray-100 overflow-hidden">
-        <table className="w-full text-xs">
-          <thead>
-            <tr className="border-b border-gray-100 bg-gray-50">
-              <th className="text-left px-3 py-2 font-medium text-gray-400 uppercase tracking-wider text-[9px]">SKU</th>
-              <th className="text-left px-3 py-2 font-medium text-gray-400 uppercase tracking-wider text-[9px]">Product</th>
-              <th className="text-left px-3 py-2 font-medium text-gray-400 uppercase tracking-wider text-[9px]">Variant</th>
-              <th className="text-right px-3 py-2 font-medium text-gray-400 uppercase tracking-wider text-[9px]">Qty</th>
-              <th className="text-right px-3 py-2 font-medium text-gray-400 uppercase tracking-wider text-[9px]">Unit</th>
-              <th className="text-right px-3 py-2 font-medium text-gray-400 uppercase tracking-wider text-[9px]">Total</th>
-              <th className="text-left px-3 py-2 font-medium text-gray-400 uppercase tracking-wider text-[9px]">Fulfillment</th>
-              <th className="text-left px-3 py-2 font-medium text-gray-400 uppercase tracking-wider text-[9px]">Notes</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-50 bg-white">
-            {filtered.map(li => (
-              <tr key={li.id} className="hover:bg-blue-50/30 transition-colors">
-                <td className="px-3 py-2 font-mono text-gray-500 text-[10px] whitespace-nowrap">
-                  {li.sku ?? <span className="text-gray-200">—</span>}
-                </td>
-                <td className="px-3 py-2 text-gray-800 font-medium max-w-[200px]">
-                  <span className="truncate block text-[11px]" title={li.product_title ?? li.name ?? ""}>
-                    {li.product_title ?? li.name ?? "—"}
-                  </span>
-                </td>
-                <td className="px-3 py-2 text-gray-400 text-[10px]">
-                  {li.variant_title && li.variant_title !== "Default Title" ? li.variant_title : <span className="text-gray-200">—</span>}
-                </td>
-                <td className="px-3 py-2 text-right font-semibold text-gray-700 tabular-nums">{li.quantity}</td>
-                <td className="px-3 py-2 text-right text-gray-500 tabular-nums">{fmt(li.price, cur)}</td>
-                <td className="px-3 py-2 text-right font-medium text-gray-800 tabular-nums">
-                  {li.price != null ? fmt(li.price * li.quantity, cur) : "—"}
-                </td>
-                <td className="px-3 py-2">
-                  {li.fulfillment_status
-                    ? <Badge value={li.fulfillment_status} colors={FULFIL_COLORS} />
-                    : <span className="text-gray-200 text-[10px]">—</span>}
-                </td>
-                <td className="px-3 py-2">
-                  <div className="flex gap-1 flex-wrap">
-                    {li.gift_card && <span className="px-1.5 py-0.5 bg-purple-50 text-purple-600 rounded-full text-[9px] font-medium border border-purple-100">Gift card</span>}
-                    {!li.requires_shipping && <span className="px-1.5 py-0.5 bg-gray-100 text-gray-400 rounded-full text-[9px] border border-gray-200">No shipping</span>}
-                    {li.properties?.map((p: { name: string; value: string }) => (
-                      <span key={p.name} className="px-1.5 py-0.5 bg-amber-50 text-amber-600 border border-amber-100 rounded text-[9px]" title={`${p.name}: ${p.value}`}>
-                        {p.name}: {p.value}
-                      </span>
-                    ))}
-                  </div>
-                </td>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-gray-100 bg-gray-50">
+                {activeCols.map(f => (
+                  <th key={f.key} className="text-left px-3 py-2 font-medium text-gray-400 uppercase tracking-wider text-[9px] whitespace-nowrap">
+                    <span className="flex items-center gap-1">
+                      {sourceTag(f.source)}{f.name}
+                    </span>
+                  </th>
+                ))}
               </tr>
-            ))}
-            {filtered.length === 0 && (
-              <tr>
-                <td colSpan={8} className="px-3 py-3 text-center text-xs text-gray-400">No items match your filter</td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+            </thead>
+            <tbody className="divide-y divide-gray-50 bg-white">
+              {filtered.map(li => (
+                <tr key={li.id} className="hover:bg-blue-50/30 transition-colors">
+                  {activeCols.map(f => (
+                    <td key={f.key} className="px-3 py-2 whitespace-nowrap max-w-[200px]">
+                      <LiCell field={f} li={li} currency={cur} />
+                    </td>
+                  ))}
+                </tr>
+              ))}
+              {filtered.length === 0 && (
+                <tr>
+                  <td colSpan={activeCols.length || 1} className="px-3 py-3 text-center text-xs text-gray-400">No items match</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
@@ -827,6 +962,7 @@ export default function OrdersPage() {
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [density, setDensity] = useState<Density>("compact");
   const [showDensity, setShowDensity] = useState(false);
+  const [liRegistry, setLiRegistry] = useState<RegistryField[]>([]);
   const searchRef = useRef<HTMLInputElement>(null);
 
   const getToken = () => localStorage.getItem("oms_token");
@@ -849,6 +985,10 @@ export default function OrdersPage() {
     fetch(`${API_URL}/rules/transforms?source_entity=order`, { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.ok ? r.json() : [])
       .then((transforms: ComputedFieldDef[]) => { setComputedDefs(transforms.filter((t: ComputedFieldDef) => t.output_field_key)); })
+      .catch(() => {});
+    fetch(`${API_URL}/fields/registry?entity_type=line_item`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.ok ? r.json() : [])
+      .then((fields: RegistryField[]) => { if (fields.length) setLiRegistry(fields); })
       .catch(() => {});
   }, []);
 
@@ -1165,7 +1305,7 @@ export default function OrdersPage() {
                     {expanded.has(order.id) && (
                       <tr key={`${order.id}-items`} className="bg-slate-50 border-b border-gray-100">
                         <td colSpan={colDefs.length + 1} className="border-l-2 border-blue-300">
-                          <LineItemsPanel items={order.line_items} currency={order.currency} />
+                          <LineItemsPanel items={order.line_items} currency={order.currency} liRegistry={liRegistry} />
                         </td>
                       </tr>
                     )}

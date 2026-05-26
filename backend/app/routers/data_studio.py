@@ -14,7 +14,8 @@ from app.database import get_db as get_async_session
 from app.utils.auth import get_current_user
 from app.models import (
     User, FieldTransformRule, DerivedFieldValue, RecalculationJob, EntityRelationship,
-    Order, LineItem, Product, Variant, Customer
+    Order, LineItem, Product, Variant, Customer,
+    CustomFieldDefinition,
 )
 from app.utils.rule_engine import RuleExecutionGraph, RecalculationManager, apply_transform
 
@@ -279,6 +280,9 @@ async def create_rule(
     await db.commit()
     await db.refresh(rule)
 
+    # Auto-register in field registry so it shows up in UI column choosers
+    await _ensure_field_registered(db, shop_id, rule)
+
     # Queue recalculation if needed
     if rule_data.recalculation_mode != "new_only":
         manager = RecalculationManager(db)
@@ -323,6 +327,10 @@ async def update_rule(
 
     await db.commit()
     await db.refresh(rule)
+
+    # Keep field registry in sync (label or type may have changed)
+    shop_id = await get_shop_id(db, current_user)
+    await _ensure_field_registered(db, shop_id, rule)
 
     # Queue recalculation if needed
     if needs_recalc:
@@ -744,6 +752,35 @@ async def refresh_values(
 # ═════════════════════════════════════════════════════════════════
 # Helper Functions
 # ═════════════════════════════════════════════════════════════════
+
+async def _ensure_field_registered(
+    db: AsyncSession, shop_id: str, rule: FieldTransformRule
+) -> None:
+    """Upsert a CustomFieldDefinition for a transform rule's output field."""
+    existing = await db.execute(
+        select(CustomFieldDefinition).where(
+            CustomFieldDefinition.shop_id == shop_id,
+            CustomFieldDefinition.entity_type == rule.output_entity,
+            CustomFieldDefinition.key == f"cf_{rule.output_field_key}",
+        )
+    )
+    cfd = existing.scalar_one_or_none()
+    field_type = rule.output_field_type if rule.output_field_type in ("text", "number", "boolean", "date", "json") else "text"
+    if cfd:
+        cfd.name = rule.output_field_label
+        cfd.field_type = field_type
+        cfd.description = f"Computed by Data Studio rule: {rule.name}"
+    else:
+        db.add(CustomFieldDefinition(
+            shop_id=shop_id,
+            entity_type=rule.output_entity,
+            key=f"cf_{rule.output_field_key}",
+            name=rule.output_field_label,
+            field_type=field_type,
+            description=f"Computed by Data Studio rule: {rule.name}",
+        ))
+    await db.commit()
+
 
 async def _infer_path(db: AsyncSession, from_entity: str, to_entity: str) -> List[dict]:
     """Auto-infer relationship path between entities."""

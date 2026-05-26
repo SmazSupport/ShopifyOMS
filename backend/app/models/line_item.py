@@ -56,6 +56,10 @@ class LineItem(Base, TimestampMixin):
     # Custom attributes / properties (e.g. gift message, personalisation)
     properties: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
+    # Dynamic field storage
+    extra_attributes: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    computed_fields: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
     # OMS FK
     variant_id: Mapped[str | None] = mapped_column(String, ForeignKey("variants.id"), nullable=True, index=True)
 
