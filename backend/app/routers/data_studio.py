@@ -573,32 +573,36 @@ async def get_schema(
                 native_cols = [c for c in columns if not c.endswith("_id") or c == "id"]
                 schema[entity_name]["native_fields"] = native_cols
 
-        # 2. DISCOVER CUSTOM FIELDS
+        # 2. DISCOVER CUSTOM FIELDS (columns are: entity_type, key, name, field_type)
         try:
             custom_fields_result = await db.execute(
-                select(CustomFieldDefinition.entity_type, CustomFieldDefinition.field_key,
-                       CustomFieldDefinition.field_label, CustomFieldDefinition.field_type)
+                select(CustomFieldDefinition.entity_type, CustomFieldDefinition.key,
+                       CustomFieldDefinition.name, CustomFieldDefinition.field_type)
             )
             custom_fields = custom_fields_result.all()
-            for entity_type, field_key, field_label, field_type in custom_fields:
+            for entity_type, field_key, field_name, field_type in custom_fields:
                 if entity_type in schema:
                     schema[entity_type]["custom_fields"].append({
                         "key": field_key,
-                        "label": field_label or field_key,
+                        "label": field_name or field_key,
                         "type": field_type or "string"
                     })
         except Exception as e:
             print(f"Custom fields discovery error: {e}")
 
-        # 3. DISCOVER METAFIELDS
+        # 3. DISCOVER METAFIELDS (need to join with CustomFieldDefinition to get entity_type)
         try:
+            from sqlalchemy.orm import joinedload
             metafields_result = await db.execute(
-                select(MetafieldMapping.entity_type, MetafieldMapping.shopify_namespace,
-                       MetafieldMapping.shopify_key).distinct()
+                select(MetafieldMapping, CustomFieldDefinition.entity_type)
+                .join(CustomFieldDefinition, MetafieldMapping.custom_field_id == CustomFieldDefinition.id)
+                .distinct()
             )
-            metafields = metafields_result.all()
-            for entity_type, namespace, key in metafields:
+            rows = metafields_result.all()
+            for metafield_mapping, entity_type in rows:
                 if entity_type in schema:
+                    namespace = metafield_mapping.shopify_namespace
+                    key = metafield_mapping.shopify_key
                     metafield_key = f"{namespace}.{key}" if namespace else key
                     schema[entity_type]["metafields"].append({
                         "key": metafield_key,
