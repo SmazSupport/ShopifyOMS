@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from typing import Optional, Any
 from app.database import get_db
 from app.models.order import Order
-from app.models.fulfillment import FieldTransformRule
+from app.models.fulfillment import FieldTransformRule, DerivedFieldValue
 from app.models.custom_field import CustomFieldDefinition, CustomFieldValue
 from app.utils.auth import get_current_user
 from app.utils.rule_engine import apply_field_transforms
@@ -132,7 +132,7 @@ async def list_orders(
     )
     li_custom_field_defs = {cfd.key: cfd for cfd in cfd_result.scalars().all()}
 
-    # Collect all line item IDs to bulk-fetch custom_field_values
+    # Collect all line item IDs to bulk-fetch custom_field_values + derived_field_values
     all_li_ids = [li.id for o in orders for li in o.line_items]
     custom_values_by_li: dict[str, dict[str, Any]] = {}
     if all_li_ids and li_custom_field_defs:
@@ -150,6 +150,34 @@ async def list_orders(
                 custom_values_by_li.setdefault(cv.entity_id, {})[cfd.key] = (
                     cv.value.get("v") if isinstance(cv.value, dict) and "v" in cv.value else cv.value
                 )
+
+    # Load pre-computed DerivedFieldValues for line items and merge into custom_fields
+    if all_li_ids:
+        # Load rules to map rule_id -> output_field_key
+        dfv_rules_result = await db.execute(
+            select(FieldTransformRule).where(
+                FieldTransformRule.output_entity == "line_item",
+                FieldTransformRule.is_active == True,
+            )
+        )
+        dfv_rules_map = {r.id: r.output_field_key for r in dfv_rules_result.scalars().all() if r.output_field_key}
+
+        if dfv_rules_map:
+            dfv_result = await db.execute(
+                select(DerivedFieldValue).where(
+                    DerivedFieldValue.entity_type == "line_item",
+                    DerivedFieldValue.entity_id.in_(all_li_ids),
+                    DerivedFieldValue.rule_id.in_(list(dfv_rules_map.keys())),
+                    DerivedFieldValue.is_stale == False,
+                )
+            )
+            for dfv in dfv_result.scalars().all():
+                field_key = dfv_rules_map.get(dfv.rule_id)
+                if field_key:
+                    val = dfv.value
+                    if isinstance(val, str) and val.startswith('"') and val.endswith('"'):
+                        val = val[1:-1]
+                    custom_values_by_li.setdefault(dfv.entity_id, {})[field_key] = val
 
     items = []
     for o in orders:
