@@ -392,11 +392,14 @@ function SkeletonRow({ cols }: { cols: number }) {
 function LiCell({ field, li, currency }: { field: RegistryField; li: LineItem; currency: string }) {
   const dash = <span className="text-gray-200">—</span>;
 
-  // Computed fields (from Data Studio transforms)
+  // Computed fields (from Data Studio transforms / DerivedFieldValues)
   if (field.source === "computed") {
     const key = field.key.replace(/^cf_/, "");
-    const v = li.computed_fields?.[key] ?? li.computed_fields?.[field.key];
-    if (!v) return dash;
+    const v = li.computed_fields?.[key]
+      ?? li.computed_fields?.[field.key]
+      ?? li.custom_fields?.[key]
+      ?? li.custom_fields?.[field.key];
+    if (v == null) return dash;
     return <span className="px-1.5 py-0.5 bg-violet-50 text-violet-700 rounded text-[10px] font-medium ring-1 ring-violet-100">{String(v)}</span>;
   }
 
