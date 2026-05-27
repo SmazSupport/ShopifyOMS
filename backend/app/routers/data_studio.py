@@ -780,25 +780,27 @@ async def _ensure_field_registered(
     db: AsyncSession, shop_id: str, rule: FieldTransformRule
 ) -> None:
     """Upsert a CustomFieldDefinition for a transform rule's output field."""
+    field_key = rule.output_field_key
+    display_name = rule.output_field_label or rule.name or field_key
     existing = await db.execute(
         select(CustomFieldDefinition).where(
             CustomFieldDefinition.shop_id == shop_id,
             CustomFieldDefinition.entity_type == rule.output_entity,
-            CustomFieldDefinition.key == f"cf_{rule.output_field_key}",
+            CustomFieldDefinition.key == field_key,
         )
     )
     cfd = existing.scalar_one_or_none()
     field_type = rule.output_field_type if rule.output_field_type in ("text", "number", "boolean", "date", "json") else "text"
     if cfd:
-        cfd.name = rule.output_field_label
+        cfd.name = display_name
         cfd.field_type = field_type
         cfd.description = f"Computed by Data Studio rule: {rule.name}"
     else:
         db.add(CustomFieldDefinition(
             shop_id=shop_id,
             entity_type=rule.output_entity,
-            key=f"cf_{rule.output_field_key}",
-            name=rule.output_field_label,
+            key=field_key,
+            name=display_name,
             field_type=field_type,
             description=f"Computed by Data Studio rule: {rule.name}",
         ))
