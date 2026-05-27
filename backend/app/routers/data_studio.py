@@ -410,11 +410,15 @@ async def test_transform(
     return results
 
 
+class RecalcRequest(BaseModel):
+    scope: str = "all_orders"
+    specific_order_ids: Optional[List[str]] = None
+
+
 @router.post("/rules/{rule_id}/recalculate")
 async def trigger_recalculation(
     rule_id: str,
-    scope: Optional[str] = None,
-    specific_orders: Optional[List[str]] = None,
+    body: RecalcRequest = RecalcRequest(),
     db: AsyncSession = Depends(get_async_session),
     current_user: User = Depends(get_current_user)
 ):
@@ -427,16 +431,22 @@ async def trigger_recalculation(
     if not rule:
         raise HTTPException(status_code=404, detail="Rule not found")
 
-    # Override scope if provided
-    if scope:
-        rule.recalculation_mode = scope
+    shop_id = await get_shop_id(db, current_user)
 
-    manager = RecalculationManager(db)
-    job_id = await db.run_sync(
-        lambda s: manager.on_rule_updated(rule, current_user.email)
+    job = RecalculationJob(
+        shop_id=shop_id,
+        trigger_type="manual",
+        rule_id=rule.id,
+        scope=body.scope,
+        specific_order_ids=body.specific_order_ids,
+        status="pending",
+        triggered_by=current_user.email,
     )
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
 
-    return {"job_id": job_id, "status": "queued"}
+    return {"job_id": job.id, "status": "queued", "scope": body.scope}
 
 
 # ═════════════════════════════════════════════════════════════════

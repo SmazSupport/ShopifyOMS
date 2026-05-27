@@ -1417,8 +1417,12 @@ export default function DataStudioPage() {
   }, [api]);
 
   // Trigger recalculation
-  const triggerRecalc = useCallback(async (ruleId: string) => {
-    await api(`/data-studio/rules/${ruleId}/recalculate`, { method: "POST" });
+  const triggerRecalc = useCallback(async (ruleId: string, scope = "all_orders") => {
+    await api(`/data-studio/rules/${ruleId}/recalculate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scope }),
+    });
     setShowJobsPanel(true);
   }, [api]);
 
