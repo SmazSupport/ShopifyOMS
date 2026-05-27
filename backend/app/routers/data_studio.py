@@ -159,7 +159,7 @@ class RecalculationJobResponse(BaseModel):
     completed_at: Optional[str]
     error_message: Optional[str]
     triggered_by: Optional[str]
-    created_at: str
+    created_at: Optional[datetime]
 
     class Config:
         from_attributes = True

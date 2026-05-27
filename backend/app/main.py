@@ -1,3 +1,6 @@
+import asyncio
+import logging
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
@@ -12,10 +15,27 @@ from app.routers import users
 from app.routers import rules
 from app.routers import data_studio
 
+log = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    from app.utils.job_processor import run_job_processor
+    task = asyncio.create_task(run_job_processor())
+    log.info("Background job processor task started")
+    yield
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        log.info("Background job processor task stopped")
+
+
 app = FastAPI(
     title="OMS API",
     description="Order Management System",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
