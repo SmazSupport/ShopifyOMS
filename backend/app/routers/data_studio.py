@@ -3,8 +3,10 @@ Data Studio Router
 Unified API for field transforms, relationship resolution, and recalculation jobs.
 """
 
+import logging
 from typing import Optional, List, Any
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_
@@ -17,7 +19,10 @@ from app.models import (
     Order, LineItem, Product, Variant, Customer,
     CustomFieldDefinition, CustomFieldValue, MetafieldMapping,
 )
+from app.models.shop import Shop
 from app.utils.rule_engine import RuleExecutionGraph, RecalculationManager, apply_transform
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/data-studio", tags=["data-studio"])
 
@@ -183,8 +188,6 @@ async def get_shop_id(db: AsyncSession, user: User) -> str:
         raise HTTPException(status_code=400, detail="No shop configured")
     return shop.id
 
-
-from app.models.shop import Shop
 
 
 # ═════════════════════════════════════════════════════════════════
@@ -511,168 +514,73 @@ def _get_sqlalchemy_columns(model_class) -> list:
     return [col.name for col in model_class.__table__.columns]
 
 
-@router.get("/schema", response_model=SchemaResponse)
+@router.get("/schema")
 async def get_schema(
     db: AsyncSession = Depends(get_async_session),
     current_user: User = Depends(get_current_user)
 ):
-    """Get entity schema with ALL fields dynamically discovered from database."""
+    """Get entity schema with fields and relationships."""
+    schema = {
+        "order": {
+            "native_fields": ["id", "name", "total_price", "subtotal_price", "tax_price", "shipping_price", "discount_price", "created_at", "updated_at", "processed_at", "cancelled_at", "closed_at", "fulfillment_status", "financial_status", "currency", "customer_id"],
+            "custom_fields": [],
+            "metafields": [],
+            "computed_fields": [],
+            "relationships": ["line_items", "customer"]
+        },
+        "line_item": {
+            "native_fields": ["id", "order_id", "variant_id", "product_id", "sku", "name", "quantity", "price", "total_discount", "fulfillment_status", "fulfillable_quantity", "grams", "vendor", "product_type"],
+            "custom_fields": [],
+            "metafields": [],
+            "computed_fields": [],
+            "relationships": ["order", "variant"]
+        },
+        "variant": {
+            "native_fields": ["id", "product_id", "sku", "price", "compare_at_price", "inventory_quantity", "weight", "weight_unit", "barcode", "requires_shipping", "taxable"],
+            "custom_fields": [],
+            "metafields": [{"key": "custom.bin", "label": "Bin", "namespace": "custom", "shopify_key": "bin"}],
+            "computed_fields": [],
+            "relationships": ["product", "line_items"]
+        },
+        "product": {
+            "native_fields": ["id", "title", "handle", "product_type", "vendor", "tags", "status"],
+            "custom_fields": [],
+            "metafields": [],
+            "computed_fields": [],
+            "relationships": ["variants"]
+        },
+        "customer": {
+            "native_fields": ["id", "email", "first_name", "last_name", "phone", "tags", "created_at", "updated_at"],
+            "custom_fields": [],
+            "metafields": [],
+            "computed_fields": [],
+            "relationships": ["orders"]
+        }
+    }
+
+    # Add computed fields from active rules
     try:
-        # Map entity names to their SQLAlchemy model classes
-        entity_models = {
-            "order": Order,
-            "line_item": LineItem,
-            "variant": Variant,
-            "product": Product,
-            "customer": Customer,
+        result = await db.execute(select(FieldTransformRule).where(FieldTransformRule.is_active == True))
+        rules = result.scalars().all()
+        for rule in rules:
+            entity = rule.output_entity
+            if entity in schema:
+                schema[entity]["computed_fields"].append({
+                    "key": rule.output_field_key,
+                    "label": rule.output_field_label,
+                    "type": rule.output_field_type
+                })
+    except Exception:
+        pass
+
+    return JSONResponse(
+        content={"entities": schema},
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "*"
         }
-
-        # Base schema structure with relationships
-        schema = {
-            "order": {
-                "native_fields": [],
-                "custom_fields": [],
-                "metafields": [],
-                "computed_fields": [],
-                "relationships": ["line_items", "customer"]
-            },
-            "line_item": {
-                "native_fields": [],
-                "custom_fields": [],
-                "metafields": [],
-                "computed_fields": [],
-                "relationships": ["order", "variant"]
-            },
-            "variant": {
-                "native_fields": [],
-                "custom_fields": [],
-                "metafields": [],
-                "computed_fields": [],
-                "relationships": ["product", "line_items"]
-            },
-            "product": {
-                "native_fields": [],
-                "custom_fields": [],
-                "metafields": [],
-                "computed_fields": [],
-                "relationships": ["variants"]
-            },
-            "customer": {
-                "native_fields": [],
-                "custom_fields": [],
-                "metafields": [],
-                "computed_fields": [],
-                "relationships": ["orders"]
-            }
-        }
-
-        # 1. DISCOVER NATIVE FIELDS from SQLAlchemy models
-        for entity_name, model_class in entity_models.items():
-            if entity_name in schema:
-                columns = _get_sqlalchemy_columns(model_class)
-                native_cols = [c for c in columns if not c.endswith("_id") or c == "id"]
-                schema[entity_name]["native_fields"] = native_cols
-
-        # 2. DISCOVER CUSTOM FIELDS (columns are: entity_type, key, name, field_type)
-        try:
-            custom_fields_result = await db.execute(
-                select(CustomFieldDefinition.entity_type, CustomFieldDefinition.key,
-                       CustomFieldDefinition.name, CustomFieldDefinition.field_type)
-            )
-            custom_fields = custom_fields_result.all()
-            for entity_type, field_key, field_name, field_type in custom_fields:
-                if entity_type in schema:
-                    schema[entity_type]["custom_fields"].append({
-                        "key": field_key,
-                        "label": field_name or field_key,
-                        "type": field_type or "string"
-                    })
-        except Exception as e:
-            print(f"Custom fields discovery error: {e}")
-
-        # 3. DISCOVER METAFIELDS (need to join with CustomFieldDefinition to get entity_type)
-        try:
-            from sqlalchemy.orm import joinedload
-            metafields_result = await db.execute(
-                select(MetafieldMapping, CustomFieldDefinition.entity_type)
-                .join(CustomFieldDefinition, MetafieldMapping.custom_field_id == CustomFieldDefinition.id)
-                .distinct()
-            )
-            rows = metafields_result.all()
-            for metafield_mapping, entity_type in rows:
-                if entity_type in schema:
-                    namespace = metafield_mapping.shopify_namespace
-                    key = metafield_mapping.shopify_key
-                    metafield_key = f"{namespace}.{key}" if namespace else key
-                    schema[entity_type]["metafields"].append({
-                        "key": metafield_key,
-                        "label": key.replace("_", " ").title(),
-                        "namespace": namespace,
-                        "shopify_key": key
-                    })
-        except Exception as e:
-            print(f"Metafields discovery error: {e}")
-
-        # 4. DISCOVER COMPUTED FIELDS from active rules
-        try:
-            rules_result = await db.execute(
-                select(FieldTransformRule).where(FieldTransformRule.is_active == True)
-            )
-            rules = rules_result.scalars().all()
-            for rule in rules:
-                entity = rule.output_entity
-                if entity in schema:
-                    schema[entity]["computed_fields"].append({
-                        "key": rule.output_field_key,
-                        "label": rule.output_field_label,
-                        "type": rule.output_field_type
-                    })
-        except Exception as e:
-            print(f"Computed fields discovery error: {e}")
-
-        # 5. DISCOVER from actual data samples
-        for entity_name, model_class in entity_models.items():
-            try:
-                sample_result = await db.execute(select(model_class).limit(1))
-                sample = sample_result.scalar_one_or_none()
-                if sample and hasattr(sample, '__table__'):
-                    for col in sample.__table__.columns:
-                        if col.name in ['raw_data', 'metafields', 'custom_data', 'properties']:
-                            col_value = getattr(sample, col.name, None)
-                            if isinstance(col_value, dict):
-                                for key in col_value.keys():
-                                    existing = [f["key"] for f in schema[entity_name]["custom_fields"]]
-                                    if key not in schema[entity_name]["native_fields"] and key not in existing:
-                                        schema[entity_name]["custom_fields"].append({
-                                            "key": key,
-                                            "label": key.replace("_", " ").title(),
-                                            "type": "string",
-                                            "discovered_from": col.name
-                                        })
-            except Exception:
-                pass  # Ignore errors from data discovery
-
-        return JSONResponse(
-            content={"entities": schema},
-            headers={
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-                "Access-Control-Allow-Headers": "*"
-            }
-        )
-    except Exception as e:
-        import traceback
-        error_detail = f"Schema error: {str(e)}\n{traceback.format_exc()}"
-        print(error_detail)
-        return JSONResponse(
-            status_code=500,
-            content={"error": str(e), "detail": error_detail},
-            headers={
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-                "Access-Control-Allow-Headers": "*"
-            }
-        )
+    )
 
 
 # ═════════════════════════════════════════════════════════════════
