@@ -1777,6 +1777,77 @@ export default function DataStudioPage() {
             </div>
           </div>
         </div>
+
+        {/* ── Jobs Slide Panel ── */}
+        <SlidePanel
+          open={showJobsPanel}
+          onClose={() => setShowJobsPanel(false)}
+          title="Recalculation Jobs"
+          subtitle={`${recalcJobs.length} job${recalcJobs.length !== 1 ? "s" : ""}`}
+          accentColor="bg-gray-800"
+        >
+          {recalcJobs.length === 0 ? (
+            <div className="text-center py-12 text-gray-400 text-sm">No jobs yet. Hit Recalculate on a rule to queue one.</div>
+          ) : (
+            <div className="space-y-3">
+              {recalcJobs.map((job) => {
+                const statusColor: Record<string, string> = {
+                  pending:               "bg-yellow-100 text-yellow-800",
+                  running:               "bg-blue-100 text-blue-800",
+                  completed:             "bg-green-100 text-green-800",
+                  completed_with_errors: "bg-orange-100 text-orange-800",
+                  failed:                "bg-red-100 text-red-800",
+                };
+                const pct = job.total_orders && job.processed_orders != null
+                  ? Math.round((job.processed_orders / job.total_orders) * 100)
+                  : null;
+                return (
+                  <div key={job.id} className="border border-gray-100 rounded-lg p-4 space-y-2 bg-gray-50">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-sm font-medium text-gray-900 truncate">{job.rule_name ?? job.rule_id}</span>
+                      <span className={`text-xs font-medium px-2 py-0.5 rounded-full shrink-0 ${statusColor[job.status] ?? "bg-gray-100 text-gray-600"}`}>
+                        {job.status.replace(/_/g, " ")}
+                      </span>
+                    </div>
+                    <div className="text-xs text-gray-500 flex gap-3 flex-wrap">
+                      <span>Scope: <b>{job.scope.replace(/_/g, " ")}</b></span>
+                      <span>Trigger: {job.trigger_type}</span>
+                      {job.triggered_by && <span>By: {job.triggered_by}</span>}
+                    </div>
+                    {pct !== null && (
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-xs text-gray-500">
+                          <span>{job.processed_orders} / {job.total_orders} orders</span>
+                          <span>{pct}%</span>
+                        </div>
+                        <div className="w-full bg-gray-200 rounded-full h-1.5">
+                          <div
+                            className={`h-1.5 rounded-full transition-all ${job.status === "failed" ? "bg-red-400" : "bg-blue-500"}`}
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                        {job.failed_count != null && job.failed_count > 0 && (
+                          <p className="text-xs text-orange-600">{job.failed_count} failed</p>
+                        )}
+                      </div>
+                    )}
+                    {job.error_message && (
+                      <p className="text-xs text-red-600 bg-red-50 rounded p-2">{job.error_message}</p>
+                    )}
+                    <div className="text-xs text-gray-400">
+                      {job.completed_at
+                        ? `Completed ${new Date(job.completed_at).toLocaleString()}`
+                        : job.started_at
+                        ? `Started ${new Date(job.started_at).toLocaleString()}`
+                        : `Queued ${new Date(job.created_at).toLocaleString()}`}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </SlidePanel>
+
       </AppLayout>
     );
   }
