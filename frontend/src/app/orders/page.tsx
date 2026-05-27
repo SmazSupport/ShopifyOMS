@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef, useMemo } from "react";
+import React, { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import AppLayout from "@/components/AppLayout";
 
@@ -1280,9 +1280,8 @@ export default function OrdersPage() {
                     </td>
                   </tr>
                 ) : sortedItems.map((order, rowIdx) => (
-                  <>
+                  <React.Fragment key={order.id}>
                     <tr
-                      key={order.id}
                       onClick={() => toggleExpand(order.id)}
                       className={`border-b border-gray-50 cursor-pointer transition-colors group
                         ${expanded.has(order.id)
@@ -1309,7 +1308,7 @@ export default function OrdersPage() {
                         </td>
                       </tr>
                     )}
-                  </>
+                  </React.Fragment>
                 ))}
               </tbody>
             </table>

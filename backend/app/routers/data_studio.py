@@ -96,8 +96,8 @@ class FieldTransformRuleResponse(BaseModel):
     auto_recalc_on_source_change: bool
     is_active: bool
     notes: Optional[str]
-    created_at: Optional[str]
-    updated_at: Optional[str]
+    created_at: Optional[datetime]
+    updated_at: Optional[datetime]
 
     class Config:
         from_attributes = True
